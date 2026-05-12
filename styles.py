@@ -943,6 +943,62 @@ AGENT_STAGE_CSS = """
   .st-key-floating_chat { width: calc(100vw - 32px) !important; right: 16px !important; }
 }
 
+/* LINE-style chat bubbles inside the floating panel */
+.line-chat-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.4rem 0.1rem 0.6rem;
+}
+.line-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.45rem;
+  max-width: 100%;
+}
+.line-row-bot { justify-content: flex-start; }
+.line-row-me  { justify-content: flex-end; }
+
+.line-avatar {
+  flex: 0 0 28px;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+.line-avatar-bot {
+  background: linear-gradient(135deg, #ff6b35, #ff8c42);
+  box-shadow: 0 0 8px rgba(255, 107, 53, 0.55);
+}
+.line-avatar-me {
+  background: linear-gradient(135deg, #00d9ff, #0fa8d0);
+  box-shadow: 0 0 8px rgba(0, 217, 255, 0.55);
+}
+
+.line-bubble {
+  max-width: 76%;
+  padding: 0.55rem 0.75rem;
+  border-radius: 14px;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: #e6ebf2;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  position: relative;
+}
+.line-bubble-bot {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-bottom-left-radius: 4px;
+}
+.line-bubble-me {
+  background: linear-gradient(135deg, #06c755, #04a449);
+  border: 1px solid rgba(6, 199, 85, 0.55);
+  border-bottom-right-radius: 4px;
+  color: #ffffff;
+}
+
 /* Floating AI assistant FAB — Streamlit-native button, fixed bottom-right */
 .st-key-fab_container {
   position: fixed !important;

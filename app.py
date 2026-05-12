@@ -914,18 +914,44 @@ def _render_chat_panel() -> None:
                 "</div>",
                 unsafe_allow_html=True,
             )
-        for msg in st.session_state.chat_history[-20:]:   # cap to last 20 for performance
-            with st.chat_message(msg["role"], avatar=("🦞" if msg["role"] == "assistant" else "👤")):
-                st.markdown(msg["content"])
-                if msg.get("refs"):
-                    with st.expander("📚 引用文獻", expanded=False):
-                        for r in msg["refs"]:
-                            st.markdown(
-                                f"<div style='padding:0.4rem 0.6rem; background:rgba(155,89,255,0.08); "
-                                f"border-left:3px solid #9b59ff; border-radius:0 8px 8px 0; margin:0.25rem 0; font-size:0.78rem;'>"
-                                f"<b style='color:#9b59ff;'>{r['source']}</b><br>{r['quote']}</div>",
-                                unsafe_allow_html=True,
-                            )
+        # LINE-style bubbles: assistant on the left (🦞), user on the right (👤)
+        bubbles = []
+        for msg in st.session_state.chat_history[-20:]:
+            text_html = escape(msg["content"]).replace("\n", "<br>")
+            if msg["role"] == "assistant":
+                bubbles.append(
+                    "<div class='line-row line-row-bot'>"
+                    "<div class='line-avatar line-avatar-bot'>🦞</div>"
+                    "<div class='line-bubble line-bubble-bot'>"
+                    f"{text_html}"
+                    "</div>"
+                    "</div>"
+                )
+            else:
+                bubbles.append(
+                    "<div class='line-row line-row-me'>"
+                    "<div class='line-bubble line-bubble-me'>"
+                    f"{text_html}"
+                    "</div>"
+                    "<div class='line-avatar line-avatar-me'>👤</div>"
+                    "</div>"
+                )
+        if bubbles:
+            st.markdown(
+                "<div class='line-chat-stream'>" + "".join(bubbles) + "</div>",
+                unsafe_allow_html=True,
+            )
+        # Reference snippets for the latest assistant message (if any)
+        last = st.session_state.chat_history[-1] if st.session_state.chat_history else None
+        if last and last["role"] == "assistant" and last.get("refs"):
+            with st.expander("📚 引用文獻（最新回覆）", expanded=False):
+                for r in last["refs"]:
+                    st.markdown(
+                        f"<div style='padding:0.4rem 0.6rem; background:rgba(155,89,255,0.08); "
+                        f"border-left:3px solid #9b59ff; border-radius:0 8px 8px 0; margin:0.25rem 0; font-size:0.78rem;'>"
+                        f"<b style='color:#9b59ff;'>{r['source']}</b><br>{r['quote']}</div>",
+                        unsafe_allow_html=True,
+                    )
 
 
 # ── Floating chat: either collapsed FAB or expanded panel (never both) ──────
