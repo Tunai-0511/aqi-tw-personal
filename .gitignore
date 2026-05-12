@@ -1,0 +1,38 @@
+# LobsterAQI .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Streamlit secrets — never commit user-provided OpenClaw tokens
+.streamlit/secrets.toml
+.openclaw_tokens
+*.secrets
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+build/
+dist/
+*.tar.gz
+
+# Logs
+*.log

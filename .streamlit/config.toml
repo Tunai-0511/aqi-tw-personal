@@ -1,0 +1,17 @@
+# LobsterAQI Streamlit defaults — tuned for end-user "double-click to run"
+
+[server]
+port = 8501
+headless = false          # open the browser automatically
+runOnSave = false         # don't reload mid-use if a file changes on disk
+fileWatcherType = "none"  # cheaper: avoids file polling overhead
+
+[browser]
+gatherUsageStats = false  # opt out of Streamlit telemetry
+
+[theme]
+base = "dark"             # fallback before our custom CSS loads
+
+[client]
+toolbarMode = "minimal"   # hide the record/screencast button, keep Deploy if present
+showSidebarNavigation = true
