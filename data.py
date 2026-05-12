@@ -427,7 +427,7 @@ def fetch_epa_realtime(api_key: str | None = None) -> pd.DataFrame | None:
     try:
         r = requests.get(
             "https://data.moenv.gov.tw/api/v2/aqx_p_432",
-            params=params, timeout=15,
+            params=params, timeout=15, verify=False
         )
         r.raise_for_status()
         # MOENV returns HTTP 200 + plain-text error body when auth fails.

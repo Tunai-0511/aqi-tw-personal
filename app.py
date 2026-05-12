@@ -577,7 +577,7 @@ with st.sidebar:
                 params["api_key"] = token
             r = _req.get(
                 "https://data.moenv.gov.tw/api/v2/aqx_p_432",
-                params=params, timeout=15,
+                params=params, timeout=15, verify=False
             )
             ct = r.headers.get("Content-Type", "")
             # MOENV returns HTTP 200 even for auth errors; sniff body
@@ -634,8 +634,8 @@ with st.sidebar:
                 st.session_state["epa_test_result"] = (
                     "err", f"❌ HTTP {r.status_code} · MOENV 回應：「{text}」{hint}"
                 )
-        except _req.exceptions.ConnectionError:
-            st.session_state["epa_test_result"] = ("err", "❌ 連不上 data.moenv.gov.tw（DNS / 防火牆）")
+        except _req.exceptions.ConnectionError as e:
+            st.session_state["epa_test_result"] = ("err", f"❌ 連不上 data.moenv.gov.tw（DNS / 防火牆 / SSL）：{type(e).__name__} - {e}")
         except _req.exceptions.Timeout:
             st.session_state["epa_test_result"] = ("err", "❌ 連線逾時（>15s）")
         except Exception as e:
@@ -704,7 +704,7 @@ with st.sidebar:
         placeholder="貼上文獻摘要、研究結論...",
         height=68,
     )
-    if st.button("✚ 加入 RAG", width='stretch') and rag_text.strip():
+    if st.button("✚ 加入 RAG", use_container_width=True) and rag_text.strip():
         st.session_state.rag_docs.append({
             "name":  f"snippet_{len(st.session_state.rag_docs):03d}.txt",
             "size":  f"{len(rag_text)} chars",
