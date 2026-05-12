@@ -834,6 +834,44 @@ AGENT_STAGE_CSS = """
   margin-bottom: 0.6rem;
 }
 
+/* Compact 2×2 grid of agent reports under the lobster theater.
+   Uniform font / spacing across all 4 cards. Body preserves line breaks. */
+.agent-report-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin-top: 0.35rem;
+}
+.agent-report {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, rgba(15, 24, 48, 0.5)), rgba(15, 24, 48, 0.55));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+}
+.agent-report-head {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.35rem;
+}
+.agent-report-label {
+  color: #8b95a8;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.agent-report-body {
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: #c0c8d8;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+@media (max-width: 1100px) {
+  .agent-report-grid { grid-template-columns: 1fr; }
+}
+
 /* Health alert card */
 .alert-card {
   background: linear-gradient(135deg, rgba(20, 33, 70, 0.6), rgba(15, 24, 48, 0.4));
