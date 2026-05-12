@@ -1743,7 +1743,6 @@ with fc1:
         active = g["id"] in st.session_state.selected_groups
         label = f"{g['icon']} {g['label']}"
         if cols[i].button(label, key=f"group_{g['id']}",
-                            width='stretch',
                             type=("primary" if active else "secondary")):
             if active:
                 st.session_state.selected_groups.remove(g["id"])
