@@ -914,18 +914,44 @@ def _render_chat_panel() -> None:
                 "</div>",
                 unsafe_allow_html=True,
             )
-        for msg in st.session_state.chat_history[-20:]:   # cap to last 20 for performance
-            with st.chat_message(msg["role"], avatar=("🦞" if msg["role"] == "assistant" else "👤")):
-                st.markdown(msg["content"])
-                if msg.get("refs"):
-                    with st.expander("📚 引用文獻", expanded=False):
-                        for r in msg["refs"]:
-                            st.markdown(
-                                f"<div style='padding:0.4rem 0.6rem; background:rgba(155,89,255,0.08); "
-                                f"border-left:3px solid #9b59ff; border-radius:0 8px 8px 0; margin:0.25rem 0; font-size:0.78rem;'>"
-                                f"<b style='color:#9b59ff;'>{r['source']}</b><br>{r['quote']}</div>",
-                                unsafe_allow_html=True,
-                            )
+        # LINE-style bubbles: assistant on the left (🦞), user on the right (👤)
+        bubbles = []
+        for msg in st.session_state.chat_history[-20:]:
+            text_html = escape(msg["content"]).replace("\n", "<br>")
+            if msg["role"] == "assistant":
+                bubbles.append(
+                    "<div class='line-row line-row-bot'>"
+                    "<div class='line-avatar line-avatar-bot'>🦞</div>"
+                    "<div class='line-bubble line-bubble-bot'>"
+                    f"{text_html}"
+                    "</div>"
+                    "</div>"
+                )
+            else:
+                bubbles.append(
+                    "<div class='line-row line-row-me'>"
+                    "<div class='line-bubble line-bubble-me'>"
+                    f"{text_html}"
+                    "</div>"
+                    "<div class='line-avatar line-avatar-me'>👤</div>"
+                    "</div>"
+                )
+        if bubbles:
+            st.markdown(
+                "<div class='line-chat-stream'>" + "".join(bubbles) + "</div>",
+                unsafe_allow_html=True,
+            )
+        # Reference snippets for the latest assistant message (if any)
+        last = st.session_state.chat_history[-1] if st.session_state.chat_history else None
+        if last and last["role"] == "assistant" and last.get("refs"):
+            with st.expander("📚 引用文獻（最新回覆）", expanded=False):
+                for r in last["refs"]:
+                    st.markdown(
+                        f"<div style='padding:0.4rem 0.6rem; background:rgba(155,89,255,0.08); "
+                        f"border-left:3px solid #9b59ff; border-radius:0 8px 8px 0; margin:0.25rem 0; font-size:0.78rem;'>"
+                        f"<b style='color:#9b59ff;'>{r['source']}</b><br>{r['quote']}</div>",
+                        unsafe_allow_html=True,
+                    )
 
 
 # ── Floating chat: either collapsed FAB or expanded panel (never both) ──────
@@ -1264,50 +1290,38 @@ _any_agent_output = any([
 if st.session_state.pipeline_done and _any_agent_output:
     prov_label = LLM_PROVIDERS.get(st.session_state.llm_provider, {}).get("name", "LLM").upper() if st.session_state.llm_key.strip() else "FALLBACK"
 
-    def _agent_card(role_name: str, label: str, color: str, text: str, big: bool = False) -> str:
+    def _agent_card(role_name: str, label: str, color: str, text: str) -> str:
+        """Compact uniform agent-report card. No big/small split — all same size."""
         if not text:
             return ""
-        body_style = "font-size:0.95rem; line-height:1.75;" if big else "font-size:0.85rem; line-height:1.65;"
         return (
-            f"<div class='glass-card' style='border-color:{color}40; background:linear-gradient(135deg, {color}12, rgba(15,24,48,0.5));'>"
-            f"<div style='font-family:JetBrains Mono; color:{color}; letter-spacing:0.15em; font-size:0.7rem; font-weight:700; margin-bottom:0.5rem;'>"
-            f"🦞 {escape(role_name)} · {escape(label)}</div>"
-            f"<div style='{body_style} color:#c0c8d8; white-space:pre-wrap;'>{escape(text)}</div>"
+            f"<div class='agent-report' style='--accent:{color};'>"
+            f"<div class='agent-report-head' style='color:{color};'>"
+            f"🦞 {escape(role_name)} <span class='agent-report-label'>· {escape(label)}</span></div>"
+            f"<div class='agent-report-body'>{escape(text)}</div>"
             f"</div>"
         )
 
+    cards = [
+        _agent_card("採集者", "資料品質",   "#00d9ff", st.session_state.agent_a_summary),
+        _agent_card("爬蟲員", "清洗品質",   "#ff8c42", st.session_state.agent_d_summary),
+        _agent_card("分析師", "風險分析",   "#9b59ff", st.session_state.llm_analysis),
+        _agent_card("預警員", "健康建議",   "#00e676", st.session_state.agent_c_advisories),
+    ]
+    grid_html = "".join(c for c in cards if c)
+
     st.markdown(
-        f"<div class='eyebrow' style='margin-top:1rem;'>{prov_label} · 全代理人 LLM 分析報告</div>",
+        f"<div class='eyebrow' style='margin-top:1rem;'>{prov_label} · 全代理人分析報告</div>",
         unsafe_allow_html=True,
     )
-
-    # Top row: 採集者 + 爬蟲員
-    cards_top = "".join([
-        _agent_card("採集者", "資料品質評估", "#00d9ff", st.session_state.agent_a_summary),
-        _agent_card("爬蟲員", "清洗品質評估", "#ff8c42", st.session_state.agent_d_summary),
-    ])
-    if cards_top:
+    if grid_html:
         st.markdown(
-            f"<div style='display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:0.4rem;'>{cards_top}</div>",
-            unsafe_allow_html=True,
-        )
-
-    # 分析師 (main analysis, full width)
-    if st.session_state.llm_analysis:
-        st.markdown(
-            _agent_card("分析師", "風險分析報告", "#9b59ff", st.session_state.llm_analysis, big=True),
-            unsafe_allow_html=True,
-        )
-
-    # 預警員
-    if st.session_state.agent_c_advisories:
-        st.markdown(
-            _agent_card("預警員", "敏感族群健康建議", "#00e676", st.session_state.agent_c_advisories, big=True),
+            f"<div class='agent-report-grid'>{grid_html}</div>",
             unsafe_allow_html=True,
         )
 
     st.markdown(
-        "<div class='tiny muted' style='margin-top:0.6rem;'>📚 RAG 引用：WHO Air Quality Guidelines 2021、EPA NAAQS、Lancet 2023、台灣空氣品質指標技術手冊</div>",
+        "<div class='tiny muted' style='margin-top:0.4rem;'>📚 RAG 引用：WHO 2021 / EPA NAAQS / Lancet 2023 / 台灣 AQI 標準</div>",
         unsafe_allow_html=True,
     )
 

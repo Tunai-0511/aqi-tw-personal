@@ -673,6 +673,41 @@ LLM_PROVIDERS: dict[str, dict[str, str]] = {
 LAST_LLM_ERROR: str = ""
 
 
+# Various models leak their internal reasoning as <thinking>...</thinking> or
+# <think>...</think> blocks (Claude extended thinking, DeepSeek-R1, Qwen-QwQ,
+# some MiniMax). Strip them before showing to the user.
+import re as _re
+
+_REASONING_TAG_RE = _re.compile(
+    r"<\s*(thinking|think|reasoning|analysis|reflection)\s*>"
+    r"[\s\S]*?"
+    r"<\s*/\s*\1\s*>",
+    _re.IGNORECASE,
+)
+_DANGLING_OPEN_RE = _re.compile(
+    r"<\s*(thinking|think|reasoning|analysis|reflection)\s*>[\s\S]*$",
+    _re.IGNORECASE,
+)
+
+
+def clean_llm_output(text: str | None) -> str:
+    """Strip reasoning-tag blocks, leading/trailing whitespace, and code fences
+    that some models wrap around plain prose."""
+    if not text:
+        return ""
+    out = _REASONING_TAG_RE.sub("", text)
+    # If the model started a reasoning block but never closed it (truncated),
+    # cut everything from the opening tag to the end.
+    out = _DANGLING_OPEN_RE.sub("", out)
+    out = out.strip()
+    # Drop wrapping ```markdown ... ``` fences if they wrap the whole output
+    if out.startswith("```") and out.endswith("```"):
+        lines = out.splitlines()
+        if len(lines) >= 2:
+            out = "\n".join(lines[1:-1]).strip()
+    return out
+
+
 def call_llm_api(
     provider: str,
     api_key: str,
@@ -721,7 +756,7 @@ def call_llm_api(
                 return None
             data = r.json()
             try:
-                return data["content"][0]["text"]
+                return clean_llm_output(data["content"][0]["text"])
             except (KeyError, IndexError, TypeError) as e:
                 LAST_LLM_ERROR = f"Anthropic 回應解析失敗（{type(e).__name__}）：{str(data)[:200]}"
                 return None
@@ -749,7 +784,7 @@ def call_llm_api(
                 return None
             data = r.json()
             try:
-                return data["choices"][0]["message"]["content"]
+                return clean_llm_output(data["choices"][0]["message"]["content"])
             except (KeyError, IndexError, TypeError) as e:
                 LAST_LLM_ERROR = f"{provider} 回應解析失敗（{type(e).__name__}）：{str(data)[:200]}"
                 return None
