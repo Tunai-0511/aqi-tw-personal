@@ -36,3 +36,12 @@ dist/
 
 # Logs
 *.log
+
+# Local SQLite TSDB cache
+*.sqlite
+*.sqlite-journal
+lobster_aqi.sqlite
+
+# RAG knowledge base downloaded PDFs
+openclaw_skills/aqi-knowledge/docs/*.pdf
+openclaw_skills/aqi-knowledge/docs/*.html

@@ -324,40 +324,6 @@ def make_forecast_chart(df: pd.DataFrame, city_name: str) -> go.Figure:
 
 
 # ---------------------------------------------------------------------------
-# Region donut
-# ---------------------------------------------------------------------------
-
-
-def make_region_donut(snapshot: pd.DataFrame) -> go.Figure:
-    agg = snapshot.groupby("region", as_index=False).agg(aqi=("aqi", "mean"),
-                                                          count=("city", "count"),
-                                                          cities=("city", lambda x: " · ".join(x)))
-    region_colors = {"北部": CYAN, "中部": ORANGE, "南部": RED, "東部": GREEN, "離島": PURPLE}
-    colors = [region_colors.get(r, PURPLE) for r in agg["region"]]
-    fig = go.Figure(go.Pie(
-        labels=agg["region"], values=agg["aqi"],
-        hole=0.62,
-        marker=dict(colors=colors, line=dict(color="#04060f", width=3)),
-        textinfo="label+value",
-        texttemplate="<b>%{label}</b><br>%{value:.0f}",
-        textfont=dict(color="#e8eef7", size=13, family="Inter"),
-        customdata=np.stack([agg["count"], agg["cities"]], axis=-1),
-        hovertemplate=(
-            "<b>%{label}</b><br>平均 AQI: <b>%{value:.1f}</b><br>"
-            "城市數: %{customdata[0]}<br>城市: %{customdata[1]}<extra></extra>"
-        ),
-        pull=[0.03] * len(agg),
-    ))
-    fig.add_annotation(
-        text=f"<b>全國均值</b><br><span style='font-size:24px; color:{CYAN}'>{snapshot['aqi'].mean():.0f}</span>",
-        x=0.5, y=0.5, showarrow=False,
-        font=dict(color="#c0c8d8", size=11, family="Inter"),
-    )
-    fig.update_layout(**_base_layout(height=360, margin=dict(l=10, r=10, t=20, b=20)))
-    return fig
-
-
-# ---------------------------------------------------------------------------
 # Stacked pollutant composition
 # ---------------------------------------------------------------------------
 
@@ -578,34 +544,8 @@ def make_outdoor_bars(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-# ---------------------------------------------------------------------------
-# Satellite mini chart
-# ---------------------------------------------------------------------------
-
-
-def make_satellite_panel(df: pd.DataFrame) -> go.Figure:
-    fig = make_subplots(rows=1, cols=4, shared_yaxes=False,
-                        subplot_titles=("AOD<br><span style='color:#8b95a8;font-size:10px'>氣溶膠光學厚度</span>",
-                                        "NO₂ Column<br><span style='color:#8b95a8;font-size:10px'>×10¹⁵ molec/cm²</span>",
-                                        "SO₂ Column<br><span style='color:#8b95a8;font-size:10px'>DU</span>",
-                                        "CH₄ Column<br><span style='color:#8b95a8;font-size:10px'>ppb</span>"))
-    pal = [CYAN, ORANGE, PURPLE, GREEN]
-    for i, (col, c) in enumerate(zip(["AOD", "NO2_col", "SO2_col", "CH4_col"], pal), start=1):
-        fig.add_trace(go.Bar(
-            x=df["city"], y=df[col],
-            marker=dict(color=c),
-            name=col,
-            showlegend=False,
-            hovertemplate=f"<b>%{{x}}</b><br>{col}: <b>%{{y}}</b><extra></extra>",
-        ), row=1, col=i)
-        fig.update_xaxes(tickangle=-30, tickfont=dict(size=9, color=TICK), row=1, col=i,
-                          gridcolor=GRID, linecolor=AXIS_LINE)
-        fig.update_yaxes(tickfont=dict(size=9, color=TICK), row=1, col=i,
-                          gridcolor=GRID, linecolor=AXIS_LINE)
-    fig.update_layout(**_base_layout(
-        height=320,
-        showlegend=False,
-        margin=dict(l=40, r=20, t=55, b=60),
-    ))
-    fig.update_annotations(font=dict(color="#c0c8d8", size=12))
-    return fig
+# NOTE: previously this file also exported `make_satellite_panel`, which
+# rendered a synthetic "NASA TROPOMI" panel. The TROPOMI section has been
+# removed because we cannot pull real Sentinel-5P data without significant
+# Google Earth Engine / Copernicus Data Space setup. See data.py for the
+# real-data fetchers that took over the rest of the dashboard.

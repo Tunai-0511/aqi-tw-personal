@@ -1,12 +1,12 @@
 # 🦞 LobsterAQI — 台灣空氣品質多代理人監控平台
 
-深色科技風 SaaS 監控介面。四隻龍蝦代理人 + 一隻 Critic 協同採集、清洗、分析、預警台灣 20 個縣市（含離島）的空氣品質。
+深色科技風 SaaS 監控介面。三個 agent（採集者 → 分析師 → 預警員）接力採集、分析、預警台灣 20 個縣市（含離島）的空氣品質。
 
 LobsterAQI 兩件事是分開的：
 
 | 元件 | 角色 | 必填？ |
 |------|------|--------|
-| **直接 LLM API**（Anthropic / MiniMax / DeepSeek / OpenAI / 自訂） | Pipeline 中 5 隻 agent 的分析 + 右下角 AI 助理 + 城市比較頁 AI 比較 | ⭐ 必填一個 |
+| **直接 LLM API**（Anthropic / Gemini / MiniMax / OpenAI / 自訂） | Pipeline 中分析師 + 預警員的 LLM 呼叫 + 右下角 AI 助理 + 城市比較頁 AI 比較 | ⭐ 必填一個 |
 | **EPA Open Data Token**（環境部資料開放平臺） | 拉取 20 縣市即時 AQI | ⭐ 必填 |
 | **OpenClaw**（自架 lobster gateway） | 排程推送 Discord/LINE、個人記憶、進階 RAG | 選填（沒裝也可全功能跑） |
 
@@ -31,7 +31,7 @@ LobsterAQI 兩件事是分開的：
 打開後 sidebar 上有：
 
 **A. LLM 提供商**
-- 選一個提供商（Anthropic / MiniMax / DeepSeek / OpenAI / 自訂）
+- 選一個提供商（Anthropic / Google Gemini / MiniMax / OpenAI / 自訂）
 - 貼上你的 API Key
 - ✓ 綠 pill「{Provider} · 金鑰已填」= OK
 
@@ -42,21 +42,43 @@ LobsterAQI 兩件事是分開的：
 
 ### Step 3：啟動 Pipeline
 
-封面點「▶ 啟動四代理人 Pipeline」→ smooth scroll 到劇場區 → 5 隻龍蝦依序亮起跑分析（~30-60 秒）→ 主儀表板出來。
+封面點「▶ 啟動三代理人 Pipeline」→ smooth scroll 到劇場區 → 3 個 agent 依序亮起跑分析（~10-30 秒）→ 主儀表板出來。
+
+### Step 4（選填）：Discord 推送
+
+Sidebar 「Discord 推送」貼一條 channel webhook URL（頻道設定 → 整合 → Webhook → 複製 URL），按「🧪 測試 Discord」確認可用。之後 Pipeline 跑完會自動 POST 全國 AQI 摘要 + 最高/最低城市到該頻道。
 
 ---
 
-## 🦞 5 隻龍蝦代理人
+## 📡 資料來源（全部為真實外部 API，無合成資料）
 
-| 內部 ID | UI 顯示 | 任務 | 輸出 |
-|---------|---------|------|------|
-| `collector` | 採集者 | 評估剛抓到的 AQI 資料品質 | 1-2 句 |
-| `scraper`   | 爬蟲員 | 評論民間感測器清洗結果 | 1 句 |
-| `analyst`   | 分析師 | 3 段風險分析（現況/族群/趨勢）| 3 段 |
-| `critic`    | 品管員 | 審分析師的報告，給 0-100 分 | 1 句 + 分數 |
-| `advisor`   | 預警員 | 對 5 類敏感族群的具體建議 | 3-4 句 |
+| 用途 | 來源 | API | 需金鑰 |
+|------|------|-----|--------|
+| 即時 AQI（官方） | 環境部 EPA | `data.moenv.gov.tw/api/v2/aqx_p_432` | ✓ 你的 api_key |
+| 24h 歷史 AQI（官方） | 環境部 EPA | `data.moenv.gov.tw/api/v2/aqx_p_488` | ✓ 同上 |
+| 民間 PM2.5 即時（主要） | 民生公共物聯網 · 智慧城鄉空品微型感測器 | `sta.colife.org.tw/STA_AirQuality_EPAIoT/v1.0/`（OGC SensorThings API）| ✗ 公開 |
+| 民間 PM2.5 即時（補充） | LASS-net Airbox 社群網路 | `pm25.lass-net.org/data/last-all-airbox.json` | ✗ 公開 |
+| 24h 歷史 + 6h 預測（模型） | Open-Meteo · Copernicus CAMS | `air-quality-api.open-meteo.com/v1/air-quality` | ✗ 公開 |
+| 氣象（溫濕度、風向、氣壓） | Open-Meteo | `api.open-meteo.com/v1/forecast` | ✗ 公開 |
+| LLM 分析 | Anthropic / MiniMax / DeepSeek / OpenAI / 自訂 | 各自的 `/chat/completions` 或 `/v1/messages` | ✓ 你的 LLM key |
+| 本機時序快取 | SQLite | `./lobster_aqi.sqlite` | ✗ 純本機 |
+| Pipeline 推送 | Discord Channel Webhook | `discord.com/api/webhooks/...` | ✓ 你的 webhook URL |
 
-每隻 agent 用**同一個** LLM 提供商（你在 sidebar 選的那個）。Anthropic / MiniMax / DeepSeek / OpenAI 都可以。
+---
+
+## 🦞 3 個 agent 接力 pipeline
+
+| 內部 ID | UI 顯示 | 用 LLM？ | 工作 | 資料源 |
+|---------|---------|--------|------|--------|
+| `collector` | **採集者** | ❌ 純 ETL | EPA 即時抓取 + Open-Meteo 氣象 + 民生公共物聯網 / LASS 並行清洗 | 環境部 EPA `aqx_p_432` + Open-Meteo + 民生公共物聯網 SensorThings + LASS-net Airbox |
+| `analyst`   | **分析師** | ✅ | 整合資料 + RAG 文獻檢索，產出 3 段風險分析（現況 / 敏感族群 / 未來 6h 研判）| 採集者輸出 + RAG（WHO 2021 / EPA NAAQS / Lancet 2023 / 台灣 AQI 標準）|
+| `advisor`   | **預警員** | ✅ | 接分析師的風險分級，產出 5 類敏感族群（老人 / 幼童 / 氣喘 / 心血管 / 孕婦）的具體建議 | 上方資料 |
+
+**為何只剩 3 個？**
+
+初版設計過於追求「multi-agent」概念塞了 5 個 agent（採集者、爬蟲員、分析師、品管員、預警員），但其中 3 個的 LLM 呼叫只是「對剛跑完的 Python 程式碼寫一句註解」，沒有實際進入下游分析。Critic 的 0-100 分也沒實際 gate 任何重試。3-agent 版本把 ETL 集中在採集者（純資料處理、無 LLM），讓 LLM 只用在它擅長的「分析」與「個人化建議」兩個環節。
+
+`analyst` 與 `advisor` 用**同一個** LLM 提供商（你在 sidebar 選的那個）。Anthropic / Google Gemini / MiniMax / OpenAI / 自訂都可以。
 
 ---
 
@@ -103,17 +125,18 @@ openclaw onboard --install-daemon
 
 完整指南：[OpenClaw Getting Started](https://docs.openclaw.ai/start/getting-started)
 
-### B. 註冊 5 隻 agents（與 LobsterAQI 期待的 ID 一致）
+### B. 註冊 3 個 agents（與 LobsterAQI 期待的 ID 一致）
 
 從專案根目錄：
 ```bash
-for id in collector scraper analyst critic advisor; do
+for id in collector analyst advisor; do
   openclaw agents add "$id" --workspace "./openclaw_agents/$id" \
     --model minimax/MiniMax-M2.7 --non-interactive --json
 done
 ```
 
-每隻 agent 的 `openclaw_agents/<id>/SOUL.md` + `IDENTITY.md` 已預先客製。
+每個 agent 的 `openclaw_agents/<id>/SOUL.md` + `IDENTITY.md` 已預先客製。
+（`scraper/` 與 `critic/` 兩個資料夾保留下來但目前不啟用 — 它們是 5-agent 設計時的舊作。）
 
 ### C. 排程推送 Discord（每小時 AQI 摘要）
 
@@ -195,12 +218,17 @@ openclaw memory reindex --skill aqi-knowledge
 │  - 時間軸 scrubber                                            │
 └──┬───────────────────────────────────────────────────────────┘
    │
-   ├──── HTTP ────► data.moenv.gov.tw   (環境部 EPA API)
-   ├──── HTTP ────► api.open-meteo.com  (氣象，免金鑰)
+   ├──── HTTP ────► data.moenv.gov.tw           (環境部 EPA 即時 aqx_p_432 + 歷史 aqx_p_488)
+   ├──── HTTP ────► sta.colife.org.tw           (民生公共物聯網 SensorThings · 智慧城鄉空品微型感測器)
+   ├──── HTTP ────► pm25.lass-net.org           (LASS-net Airbox 社群網路 · 補充離島)
+   ├──── HTTP ────► api.open-meteo.com          (氣象，免金鑰)
+   ├──── HTTP ────► air-quality-api.open-meteo  (CAMS 大氣化學模式，免金鑰)
    ├──── HTTP ────► Anthropic / MiniMax / DeepSeek / OpenAI / 自訂
    │                 (sidebar 選的 LLM 提供商；in-app 即時回應)
+   ├──── HTTP ────► discord.com/api/webhooks/…  (選填；Pipeline 完成推播摘要)
    │
-   └──── subprocess ────► openclaw CLI  (僅用於 cron 推送、MEMORY 寫入)
+   ├──── SQLite ──► ./lobster_aqi.sqlite        (本機時序快取；跨重啟保留)
+   └──── subprocess ────► openclaw CLI          (選填；用於 cron 推送、MEMORY 寫入)
                           (OpenClaw gateway 跑在 localhost:18789，
                            處理排程、Discord/LINE 路由；in-app LLM 不走它)
 ```
@@ -237,7 +265,7 @@ aqi_dashboard/
 │   ├── 1_城市深入.py
 │   ├── 2_城市並排比較.py
 │   └── 3_個人訂閱.py
-├── openclaw_agents/        # 5 隻龍蝦的 SOUL.md / IDENTITY.md（給 OpenClaw 進階用）
+├── openclaw_agents/        # 3 個 agent 的 SOUL.md / IDENTITY.md（給 OpenClaw 進階用）
 │   ├── collector/
 │   ├── scraper/
 │   ├── analyst/

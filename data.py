@@ -5,11 +5,23 @@ All values are synthetic and meant for demo purposes only.
 
 from __future__ import annotations
 
+# Use the OS certificate store (Windows / macOS keychain) instead of certifi's
+# bundled CA list. Required for environments where OpenSSL 3.5+ rejects certs
+# missing the Subject Key Identifier extension (e.g. Taiwan MOENV's TWCA cert).
+# Must run BEFORE `import requests` so urllib3's SSL context picks it up.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
+import json
 import math
 import random
+import time
 import requests
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -167,45 +179,66 @@ def generate_time_series(hours_back: int = 24, now: datetime | None = None) -> p
     return pd.DataFrame(rows)
 
 
-def generate_forecast(city_id: str, hours_ahead: int = 6, now: datetime | None = None) -> pd.DataFrame:
-    """Six-hour forecast (mean + lower/upper confidence band) for a single city."""
-    now = now or datetime.now()
-    rng = np.random.default_rng(_seed_for(city_id + "_fc", now))
-    snap = generate_current_snapshot(now)
-    base = float(snap.loc[snap["city_id"] == city_id, "aqi"].iloc[0])
+def _open_meteo_city_slice(
+    city_id: str,
+    past_days: int = 1,
+    forecast_days: int = 1,
+) -> pd.DataFrame | None:
+    """Single-city Open-Meteo Air Quality slice — used by the forecast +
+    history-with-forecast helpers below. Returns a DataFrame with
+    `timestamp, aqi, is_forecast` (the columns the existing chart code
+    expects)."""
+    city = CITY_BY_ID.get(city_id)
+    if city is None:
+        return None
+    df = fetch_open_meteo_aq_batch([city], past_days=past_days, forecast_days=forecast_days)
+    if df is None or df.empty:
+        return None
+    df = df[df["city_id"] == city_id].dropna(subset=["aqi"]).sort_values("timestamp")
+    return df
 
-    rows = []
-    for h in range(1, hours_ahead + 1):
-        drift = rng.normal(0, 3)
-        diurnal_diff = _diurnal_factor((now.hour + h) % 24) - _diurnal_factor(now.hour)
-        val = base + diurnal_diff * 25 + drift * h * 0.6
-        spread = 6 + h * 2.5
-        rows.append({
-            "timestamp": now + timedelta(hours=h),
-            "aqi":       round(max(10, val), 1),
-            "lower":     round(max(5, val - spread), 1),
-            "upper":     round(val + spread, 1),
-            "is_forecast": True,
-        })
-    return pd.DataFrame(rows)
+
+def generate_forecast(city_id: str, hours_ahead: int = 6, now: datetime | None = None) -> pd.DataFrame:
+    """N-hour AQI forecast from Open-Meteo Copernicus CAMS.
+    Returns columns: timestamp, aqi, lower, upper, is_forecast.
+    Confidence band widens linearly with the forecast horizon
+    (a stand-in for true model uncertainty — CAMS doesn't ship per-hour σ
+    via the free endpoint)."""
+    base = _open_meteo_city_slice(city_id, past_days=0, forecast_days=2)
+    if base is None or base.empty:
+        return pd.DataFrame(columns=["timestamp", "aqi", "lower", "upper", "is_forecast"])
+    now_ts = pd.Timestamp(now or datetime.now())
+    fc = base[base["timestamp"] > now_ts].head(hours_ahead).copy()
+    fc = fc[["timestamp", "aqi"]].reset_index(drop=True)
+    fc["is_forecast"] = True
+    # Confidence band: widen by 2 AQI/hr from a 6-point floor
+    spread = 6 + (fc.index.to_series() + 1) * 2.5
+    fc["lower"] = (fc["aqi"] - spread).clip(lower=5).round(1)
+    fc["upper"] = (fc["aqi"] + spread).round(1)
+    return fc
 
 
 def generate_history_with_forecast(city_id: str, history_hours: int = 12, ahead: int = 6) -> pd.DataFrame:
-    now = datetime.now()
-    hist_rows = []
-    for h in range(history_hours, -1, -1):
-        ts = (now - timedelta(hours=h)).replace(minute=0, second=0, microsecond=0)
-        df = generate_current_snapshot(ts)
-        v = float(df.loc[df["city_id"] == city_id, "aqi"].iloc[0])
-        hist_rows.append({
-            "timestamp":   ts,
-            "aqi":         v,
-            "lower":       v,
-            "upper":       v,
-            "is_forecast": False,
-        })
-    fc = generate_forecast(city_id, ahead, now)
-    return pd.concat([pd.DataFrame(hist_rows), fc], ignore_index=True)
+    """Past N hours + next M hours for a city, both from Open-Meteo CAMS.
+    Used by the city-deep-dive forecast chart."""
+    base = _open_meteo_city_slice(city_id, past_days=2, forecast_days=2)
+    if base is None or base.empty:
+        return pd.DataFrame(columns=["timestamp", "aqi", "lower", "upper", "is_forecast"])
+    now_ts = pd.Timestamp(datetime.now())
+    hist = base[base["timestamp"] <= now_ts].tail(history_hours + 1).copy()
+    hist = hist[["timestamp", "aqi"]].copy()
+    hist["lower"] = hist["aqi"]
+    hist["upper"] = hist["aqi"]
+    hist["is_forecast"] = False
+
+    fc = base[base["timestamp"] > now_ts].head(ahead).copy()
+    fc = fc[["timestamp", "aqi"]].reset_index(drop=True)
+    fc["is_forecast"] = True
+    spread = 6 + (fc.index.to_series() + 1) * 2.5
+    fc["lower"] = (fc["aqi"] - spread).clip(lower=5).round(1)
+    fc["upper"] = (fc["aqi"] + spread).round(1)
+
+    return pd.concat([hist, fc], ignore_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -213,36 +246,32 @@ def generate_history_with_forecast(city_id: str, history_hours: int = 12, ahead:
 # ---------------------------------------------------------------------------
 
 
-def generate_citizen_vs_official(now: datetime | None = None, snapshot_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Compare Agent A's official EPA readings to Agent D's citizen-sensor scrape."""
-    if snapshot_df is not None:
-        df = snapshot_df.copy()
-        rng = np.random.default_rng(_seed_for("citizen", datetime.now()))
-    else:
-        now = now or datetime.now()
-        df = generate_current_snapshot(now)
-        rng = np.random.default_rng(_seed_for("citizen", now))
-    df["official_PM2.5"] = df["PM2.5"]
-    df["citizen_PM2.5"]  = (df["PM2.5"] + rng.normal(0, 4, len(df))).clip(lower=1).round(1)
-    df["delta"]          = (df["citizen_PM2.5"] - df["official_PM2.5"]).round(1)
-    return df[["city", "city_id", "official_PM2.5", "citizen_PM2.5", "delta"]]
+def generate_citizen_vs_official(
+    snapshot_df: pd.DataFrame,
+    lass_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compare official EPA PM2.5 (from the snapshot) against the
+    LASS-net civilian-sensor median per city (from `fetch_lass_airbox()`).
 
+    `lass_df` is the per-city DataFrame returned by `fetch_lass_airbox()`.
+    If None or empty, the comparison falls back to `citizen_PM2.5 = NaN`
+    everywhere — the UI will then show "無民間感測站覆蓋" for each city.
+    """
+    df = snapshot_df[["city", "city_id", "PM2.5"]].copy()
+    df = df.rename(columns={"PM2.5": "official_PM2.5"})
 
-def generate_satellite_panel(now: datetime | None = None, snapshot_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Synthetic NASA TROPOMI-style satellite columns."""
-    if snapshot_df is not None:
-        snap = snapshot_df.copy()
-        rng = np.random.default_rng(_seed_for("sat", datetime.now()))
+    if lass_df is not None and not lass_df.empty:
+        df = df.merge(
+            lass_df[["city_id", "citizen_PM2.5", "sensor_count"]],
+            on="city_id",
+            how="left",
+        )
     else:
-        now = now or datetime.now()
-        rng = np.random.default_rng(_seed_for("sat", now))
-        snap = generate_current_snapshot(now)
-    snap = snap.copy()
-    snap["AOD"]   = (0.15 + snap["PM2.5"] / 80 + rng.normal(0, 0.05, len(snap))).clip(lower=0.02).round(3)
-    snap["NO2_col"] = (3 + snap["NO2"] * 0.12 + rng.normal(0, 0.4, len(snap))).clip(lower=0.5).round(2)
-    snap["SO2_col"] = (0.4 + snap["SO2"] * 0.06 + rng.normal(0, 0.08, len(snap))).clip(lower=0.05).round(3)
-    snap["CH4_col"] = (1850 + rng.normal(0, 15, len(snap))).round(1)
-    return snap[["city", "AOD", "NO2_col", "SO2_col", "CH4_col"]]
+        df["citizen_PM2.5"] = float("nan")
+        df["sensor_count"]  = 0
+
+    df["delta"] = (df["citizen_PM2.5"] - df["official_PM2.5"]).round(1)
+    return df[["city", "city_id", "official_PM2.5", "citizen_PM2.5", "delta", "sensor_count"]]
 
 
 @dataclass
@@ -333,36 +362,22 @@ def best_outdoor_hours(city_id: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 # Visual display order in the lobster theater (left-to-right).
-# NOTE: Pipeline execution order is A → D → B → K → C (dependency-driven);
-# this list is purely for the desk layout.
+# Pipeline execution order: A (採集 — 含資料來源 + 清洗) → B (分析) → C (預警).
+# Previously this list had 4 agents (A/B/C + 民間感測員 D) plus a separate
+# CRITIC; the 民間感測員 was merged into 採集者 because both were doing pure
+# HTTP fetching with vestigial LLM "comment" calls, and the Critic was
+# removed because its score didn't actually gate anything (low scores
+# never triggered a retry of the analyst).
 AGENTS = [
-    {"id": "A", "name": "Agent A · 採集者", "role": "資料採集",   "color": "#00d9ff",
-     "desc": "呼叫環保署 API · Open-Meteo 氣象 API"},
-    {"id": "B", "name": "Agent B · 分析師", "role": "風險分析",   "color": "#9b59ff",
-     "desc": "加權公式 + RAG 文獻 + OpenClaw analyst"},
-    {"id": "C", "name": "Agent C · 預警員", "role": "健康預警",   "color": "#00e676",
-     "desc": "風險等級轉敏感族群建議"},
-    {"id": "D", "name": "Agent D · 爬蟲員", "role": "瀏覽器爬蟲", "color": "#ff8c42",
-     "desc": "OpenClaw Browser Agent · 民間感測網路"},
+    {"id": "A", "name": "採集者", "role": "資料採集",   "color": "#00d9ff",
+     "desc": "EPA + Open-Meteo + 民生公共物聯網 / LASS（並行清洗，無 LLM）"},
+    {"id": "B", "name": "分析師", "role": "風險分析",   "color": "#9b59ff",
+     "desc": "加權公式 + RAG 文獻檢索 + LLM 風險報告"},
+    {"id": "C", "name": "預警員", "role": "健康預警",   "color": "#00e676",
+     "desc": "風險等級 → 5 類敏感族群建議"},
 ]
 
-CRITIC = {"id": "K", "name": "Critic", "role": "報告驗證",
-          "color": "#ffd93d", "desc": "自動審稿，不合格退回 Agent B"}
 
-
-PIPELINE_STEPS: list[dict[str, Any]] = [
-    {"agent": "A", "msg": "GET https://data.moenv.gov.tw/api/v2/aqx_p_432 → 200 OK，取得測站資料",      "wait": 0.45},
-    {"agent": "A", "msg": "Open-Meteo 氣象：風向、風速、濕度、溫度合併完成",                            "wait": 0.35},
-    {"agent": "D", "msg": "啟動 Chromium Headful Browser，目標：cwbsensor.tw（無官方 API）",          "wait": 0.50},
-    {"agent": "D", "msg": "DOM 解析中：locator('table.sensor-grid tr') → 838 筆原始紀錄",            "wait": 0.55},
-    {"agent": "D", "msg": "資料清洗：丟棄 67 筆（格式錯誤/重複/離群），保留 771 筆",                    "wait": 0.40},
-    {"agent": "B", "msg": "加權公式：0.40·PM2.5 + 0.20·AQI + 0.15·O3 + 0.10·NO2 + 0.08·SO2 + 0.07·CO", "wait": 0.45},
-    {"agent": "B", "msg": "RAG 檢索：WHO Air Quality Guidelines 2021、EPA NAAQS、Lancet 2023",       "wait": 0.55},
-    {"agent": "B", "msg": "Claude API 生成分析報告（含 4 段文獻引用）",                                "wait": 0.65},
-    {"agent": "K", "msg": "Critic 審稿：引用密度 ✓、數值一致性 ✓、結論邏輯 ✓ → 92.4 分通過",            "wait": 0.45},
-    {"agent": "C", "msg": "Risk Tier 映射 → 為 10 城市生成敏感族群預警訊息",                          "wait": 0.40},
-    {"agent": "C", "msg": "InfluxDB 寫入完成 · 推播至 Webhook · Pipeline 結束",                       "wait": 0.30},
-]
 
 
 # =============================================================================
@@ -427,7 +442,7 @@ def fetch_epa_realtime(api_key: str | None = None) -> pd.DataFrame | None:
     try:
         r = requests.get(
             "https://data.moenv.gov.tw/api/v2/aqx_p_432",
-            params=params, timeout=15, verify=False
+            params=params, timeout=15,
         )
         r.raise_for_status()
         # MOENV returns HTTP 200 + plain-text error body when auth fails.
@@ -498,15 +513,16 @@ def generate_real_snapshot(epa_key: str | None = None) -> tuple[pd.DataFrame | N
 
     # Resolve actual column names once (handles both old & new MOENV schemas)
     cols = {
-        "county":   _resolve_col(raw, "County", "county", "縣市"),
-        "aqi":      _resolve_col(raw, "AQI", "aqi"),
-        "pm25":     _resolve_col(raw, "PM2.5", "pm2.5", "pm25", "PM25"),
-        "pm10":     _resolve_col(raw, "PM10", "pm10"),
-        "o3":       _resolve_col(raw, "O3", "o3"),
-        "no2":      _resolve_col(raw, "NO2", "no2"),
-        "so2":      _resolve_col(raw, "SO2", "so2"),
-        "co":       _resolve_col(raw, "CO", "co"),
-        "wind_dir": _resolve_col(raw, "WindDirec", "winddirec", "wind_direc", "wind_direction"),
+        "county":      _resolve_col(raw, "County", "county", "縣市"),
+        "aqi":         _resolve_col(raw, "AQI", "aqi"),
+        "pm25":        _resolve_col(raw, "PM2.5", "pm2.5", "pm25", "PM25"),
+        "pm10":        _resolve_col(raw, "PM10", "pm10"),
+        "o3":          _resolve_col(raw, "O3", "o3"),
+        "no2":         _resolve_col(raw, "NO2", "no2"),
+        "so2":         _resolve_col(raw, "SO2", "so2"),
+        "co":          _resolve_col(raw, "CO", "co"),
+        "wind_dir":    _resolve_col(raw, "WindDirec", "winddirec", "wind_direc", "wind_direction"),
+        "publishtime": _resolve_col(raw, "publishtime", "PublishTime", "datacreationdate"),
     }
     if cols["county"] is None or cols["aqi"] is None:
         return None, f"資料欄位無法識別（缺 County 或 AQI）。實際欄位：{list(raw.columns)[:12]}"
@@ -543,6 +559,21 @@ def generate_real_snapshot(epa_key: str | None = None) -> tuple[pd.DataFrame | N
         co   = max(0.0, col_mean("co"))
         wind_dir = col_mean("wind_dir")
 
+        # Compute minutes-since-publish from EPA's publishtime/datacreationdate
+        # so the "資料新鮮度" cards reflect actual EPA station update lag,
+        # rather than displaying "0 分鐘前" for every city.
+        publish_col = cols.get("publishtime")
+        if publish_col is not None and publish_col in sdf.columns:
+            pub_dt = pd.to_datetime(sdf[publish_col], errors="coerce").max()
+            if pd.notna(pub_dt):
+                # EPA timestamps are in UTC+8 without timezone tag — strip tz from now
+                delta_min = max(0, int((datetime.now() - pub_dt.to_pydatetime()).total_seconds() // 60))
+                updated_min = min(delta_min, 999)
+            else:
+                updated_min = 0
+        else:
+            updated_min = 0
+
         w = weather_by_region.get(city["region"], {"temp": 25.0, "humidity": 70.0, "wind_speed": 3.0, "pressure": 1013.0})
 
         risk = (0.40 * (pm25 / 35) + 0.20 * (aqi / 150) + 0.15 * (o3 / 100)
@@ -572,7 +603,7 @@ def generate_real_snapshot(epa_key: str | None = None) -> tuple[pd.DataFrame | N
             "level":      aqi_to_level(aqi)["name"],
             "level_num":  aqi_to_level(aqi)["level"],
             "color":      aqi_to_level(aqi)["color"],
-            "updated_min_ago": 0,
+            "updated_min_ago": updated_min,
         })
 
     if not rows:
@@ -581,11 +612,34 @@ def generate_real_snapshot(epa_key: str | None = None) -> tuple[pd.DataFrame | N
     return df, f"成功取得 {len(rows)} 城市即時資料（EPA + Open-Meteo）"
 
 
-def generate_real_timeseries(snapshot: pd.DataFrame, hours_back: int = 24) -> pd.DataFrame:
+def generate_real_timeseries(
+    snapshot: pd.DataFrame,
+    hours_back: int = 24,
+    epa_key: str | None = None,
+) -> pd.DataFrame:
+    """Build a 24-hour history DataFrame.
+
+    Strategy (in order of preference, each falls back to the next):
+      1. EPA aqx_p_488 — official Taiwan EPA hourly history.
+      2. Open-Meteo CAMS — Copernicus atmospheric model hourly history.
+      3. Diurnal-pattern reconstruction (clearly labelled as derived).
+
+    The synthesised fallback (3) is only used as a last resort when both
+    external sources fail. It is anchored to the current AQI reading so
+    at least the right-hand "now" edge matches reality.
     """
-    Reconstruct plausible 24-hour history anchored to real current AQI values.
-    Uses diurnal pattern scaled to the actual current reading.
-    """
+    # 1. EPA history (real Taiwan readings)
+    if epa_key:
+        epa_hist = fetch_epa_historical(epa_key, hours_back=hours_back)
+        if epa_hist is not None and not epa_hist.empty:
+            return epa_hist
+
+    # 2. Open-Meteo CAMS (real model)
+    cams = fetch_open_meteo_aq_batch(CITIES, past_days=1, forecast_days=0)
+    if cams is not None and not cams.empty:
+        return cams[cams["timestamp"] <= pd.Timestamp(datetime.now())].copy()
+
+    # 3. Fallback: diurnal-pattern reconstruction
     now = datetime.now()
     rows: list[dict[str, Any]] = []
     for _, city_row in snapshot.iterrows():
@@ -617,6 +671,495 @@ def generate_real_timeseries(snapshot: pd.DataFrame, hours_back: int = 24) -> pd
 
 
 # =============================================================================
+# Real-data fetchers — replace the synthetic generators above
+# =============================================================================
+
+LASS_AIRBOX_URL    = "https://pm25.lass-net.org/data/last-all-airbox.json"
+EPA_HIST_URL       = "https://data.moenv.gov.tw/api/v2/aqx_p_488"
+OPEN_METEO_AQ_URL  = "https://air-quality-api.open-meteo.com/v1/air-quality"
+
+# 民生公共物聯網 (Civil IoT Taiwan) — Smart City PM2.5 dense sensor network.
+# Official OGC SensorThings API at the Academia Sinica colife.org.tw mirror.
+# This is the proper "民生公共物聯網" data service endpoint — covers ~10,000+
+# civilian micro-sensors maintained under the 智慧城鄉空品微型感測器 program.
+CIVIL_IOT_STA_URL  = "https://sta.colife.org.tw/STA_AirQuality_EPAIoT/v1.0/Datastreams"
+
+# Per-city radius (km) for matching civilian sensors. Outlying islands have
+# fewer LASS sensors, so we widen the match radius for them.
+_OFFSHORE_REGIONS = {"離島", "東部"}
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: np.ndarray, lon2: np.ndarray) -> np.ndarray:
+    """Vectorised haversine distance from one point to many (km)."""
+    r_lat1 = math.radians(lat1); r_lon1 = math.radians(lon1)
+    r_lat2 = np.radians(lat2);   r_lon2 = np.radians(lon2)
+    dlat = r_lat2 - r_lat1
+    dlon = r_lon2 - r_lon1
+    a = np.sin(dlat / 2) ** 2 + math.cos(r_lat1) * np.cos(r_lat2) * np.sin(dlon / 2) ** 2
+    return 2 * 6371.0 * np.arcsin(np.sqrt(a))
+
+
+def _fetch_civil_iot_one_city(city_id: str, top: int = 200) -> list[dict]:
+    """Pull civilian PM2.5 sensors for ONE city from 民生公共物聯網 SensorThings.
+
+    Critical detail: CivilIoT stores city names in the legacy traditional
+    form (e.g. 臺北市, 臺中市, 臺南市, 臺東縣), while our internal `CITIES`
+    list uses the everyday form (台北市, 台中市, ...). We build the OData
+    $filter with **every alias** that maps to this `city_id` in
+    `COUNTY_TO_CITY_ID`, so the 臺/台 variant doesn't drop entire cities.
+
+    The API's default @iot.id ordering biases globally toward early
+    sensor deployments (Taoyuan / Yunlin pilot zones), so a global query
+    truncated at any reasonable N misses most of Taiwan. Per-city queries
+    with the alias-OR filter guarantee representative coverage everywhere.
+    """
+    aliases = [k for k, v in COUNTY_TO_CITY_ID.items() if v == city_id]
+    if not aliases:
+        return []
+    city_filter = " or ".join(f"Thing/properties/city eq '{a}'" for a in aliases)
+    filter_q = f"name eq 'PM2.5' and ({city_filter})"
+    try:
+        r = requests.get(
+            CIVIL_IOT_STA_URL,
+            params={
+                "$filter": filter_q,
+                "$expand": "Observations($orderby=phenomenonTime desc;$top=1),Thing($expand=Locations)",
+                "$top":    top,
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        body = r.json()
+    except Exception:
+        return []
+    rows: list[dict] = []
+    for ds in body.get("value") or []:
+        obs = ds.get("Observations") or []
+        if not obs:
+            continue
+        pm25 = obs[0].get("result")
+        thing = ds.get("Thing") or {}
+        locs  = thing.get("Locations") or []
+        coords = (locs[0].get("location") or {}).get("coordinates") if locs else None
+        if not coords or len(coords) < 2:
+            continue
+        # SensorThings uses GeoJSON ordering: [lon, lat]
+        lon, lat = coords[0], coords[1]
+        site = (thing.get("properties") or {}).get("stationID") or thing.get("name") or ""
+        rows.append({"site": site, "pm25": pm25, "lat": lat, "lon": lon})
+    return rows
+
+
+def _fetch_civil_iot_raw() -> tuple[list[dict] | None, str]:
+    """Pull civilian PM2.5 readings from 民生公共物聯網 SensorThings API,
+    one HTTP request per city, in parallel.
+
+    Returns (list of dicts with site/pm25/lat/lon, status_msg). The
+    SensorThings endpoint exposes ~10,000+ 智慧城鄉空品微型感測器
+    (Smart City micro-sensors); we cap per-city at 120 sensors which is
+    plenty for a median-aggregation per district.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    rows: list[dict] = []
+    failed_cities: list[str] = []
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {
+                pool.submit(_fetch_civil_iot_one_city, city["id"]): city["name"]
+                for city in CITIES
+            }
+            for fut in as_completed(futures, timeout=40):
+                city_name = futures[fut]
+                try:
+                    rows.extend(fut.result())
+                except Exception:
+                    failed_cities.append(city_name)
+    except Exception as e:
+        if not rows:
+            return None, f"CivilIoT API 失敗：{type(e).__name__}: {str(e)[:80]}"
+
+    if not rows:
+        return None, "CivilIoT 全部 20 城市查詢無回應"
+
+    suffix = f"（{len(failed_cities)} 個城市查詢失敗）" if failed_cities else ""
+    return rows, f"CivilIoT 取得 {len(rows)} 筆原始紀錄{suffix}"
+
+
+def _fetch_lass_raw() -> tuple[list[dict] | None, str]:
+    """Fallback civilian PM2.5 source - LASS-net community Airbox portal.
+    Returns same shape as `_fetch_civil_iot_raw`."""
+    try:
+        r = requests.get(LASS_AIRBOX_URL, timeout=15)
+        r.raise_for_status()
+        feeds = (r.json() or {}).get("feeds", []) or []
+    except Exception as e:
+        return None, f"LASS API 失敗：{type(e).__name__}: {str(e)[:80]}"
+    rows: list[dict] = []
+    for entry in feeds:
+        if not isinstance(entry, dict):
+            continue
+        ab = entry.get("AirBox") if isinstance(entry.get("AirBox"), dict) else entry
+        rows.append({
+            "site": ab.get("SiteName") or ab.get("device_id") or ab.get("name") or "",
+            "pm25": ab.get("s_d0"),
+            "lat":  ab.get("gps_lat") or ab.get("lat"),
+            "lon":  ab.get("gps_lon") or ab.get("lon"),
+        })
+    return rows, f"LASS 取得 {len(rows)} 筆原始紀錄"
+
+
+def fetch_citizen_sensors() -> tuple[pd.DataFrame | None, "CleaningReport | None", str]:
+    """Fetch civilian PM2.5 sensors and aggregate per city.
+
+    Pulls from TWO complementary sources in parallel and merges:
+      1. 民生公共物聯網 SensorThings API (sta.colife.org.tw · STA_AirQuality_EPAIoT)
+         — official government-curated 智慧城鄉空品微型感測器 network
+         (~10,000 sensors; strong on industrial / urban / agricultural belts)
+      2. LASS-net Airbox community portal (pm25.lass-net.org)
+         — community / academic Airbox sensors (~500 currently online;
+         strong on outlying islands 澎湖/金門/馬祖 where the official
+         programme has no deployment)
+
+    Both are honest "民生公共物聯網成員" data sources: LASS sensors feed
+    into the 民生公共物聯網 platform via SensorThings as well, but the
+    community portal exposes a simpler all-in-one snapshot endpoint.
+
+    The returned status_message names both sources and their record
+    counts. CleaningReport fields are real (computed from live data, not
+    random).
+
+    Cleaning steps:
+      1. Drop rows where PM2.5 is missing or out of plausible range (0-500 μg/m³).
+      2. Drop rows whose lat/lon fall outside the Taiwan bounding box.
+      3. De-duplicate by site/device id (keep first).
+      4. For each of our 20 cities, take the median PM2.5 of sensors within
+         a radius (5 km inland, 20 km offshore / eastern).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        ft_civil = pool.submit(_fetch_civil_iot_raw)
+        ft_lass  = pool.submit(_fetch_lass_raw)
+        civil_rows, civil_status = ft_civil.result()
+        lass_rows,  lass_status  = ft_lass.result()
+
+    civil_rows = civil_rows or []
+    lass_rows  = lass_rows or []
+    rows = civil_rows + lass_rows
+    if not rows:
+        return None, None, f"{civil_status} ｜ {lass_status}"
+
+    parts = []
+    if civil_rows:
+        parts.append(f"民生公共物聯網 {len(civil_rows)} 筆")
+    if lass_rows:
+        parts.append(f"LASS-net {len(lass_rows)} 筆")
+    source_label = " + ".join(parts) if parts else "未知來源"
+
+    df = pd.DataFrame(rows)
+    raw_count = len(df)
+
+    # 1. PM2.5 in plausible range
+    df["pm25"] = pd.to_numeric(df["pm25"], errors="coerce")
+    bad_pm = df["pm25"].isna() | (df["pm25"] <= 0) | (df["pm25"] >= 500)
+    df = df[~bad_pm].copy()
+    dropped_pm = int(bad_pm.sum())
+
+    # 2. lat/lon in Taiwan bounding box (119-123 E, 21-26.5 N — covers offshore islands)
+    df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+    df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+    in_taiwan = df["lat"].between(21.0, 26.5) & df["lon"].between(119.0, 123.0)
+    pre_geo = len(df)
+    df = df[in_taiwan].copy()
+    dropped_geo = pre_geo - len(df)
+
+    # 3. de-dup by site/device id
+    pre_dup = len(df)
+    df = df.drop_duplicates(subset=["site"], keep="first")
+    dropped_dup = pre_dup - len(df)
+
+    if df.empty:
+        return None, CleaningReport(
+            raw_records=raw_count, kept_records=0, dropped_records=raw_count,
+            drop_reasons={"PM2.5 異常": dropped_pm, "地理範圍外": dropped_geo, "重複": dropped_dup},
+        ), f"{source_label}: 清洗後無有效資料"
+
+    # 4. aggregate per city
+    sensor_lat = df["lat"].to_numpy()
+    sensor_lon = df["lon"].to_numpy()
+    sensor_pm  = df["pm25"].to_numpy()
+
+    per_city = []
+    for city in CITIES:
+        radius_km = 20.0 if city["region"] in _OFFSHORE_REGIONS else 5.0
+        d = _haversine_km(city["lat"], city["lon"], sensor_lat, sensor_lon)
+        mask = d <= radius_km
+        if mask.any():
+            per_city.append({
+                "city_id":       city["id"],
+                "city":          city["name"],
+                "citizen_PM2.5": round(float(np.median(sensor_pm[mask])), 1),
+                "sensor_count":  int(mask.sum()),
+            })
+        else:
+            per_city.append({
+                "city_id":       city["id"],
+                "city":          city["name"],
+                "citizen_PM2.5": float("nan"),
+                "sensor_count":  0,
+            })
+
+    cleaning = CleaningReport(
+        raw_records=raw_count,
+        kept_records=len(df),
+        dropped_records=raw_count - len(df),
+        drop_reasons={
+            "PM2.5 異常": dropped_pm,
+            "地理範圍外": dropped_geo,
+            "重複":      dropped_dup,
+        },
+    )
+    return pd.DataFrame(per_city), cleaning, f"{source_label}: 取得 {len(df)} 個有效感測器"
+
+
+# Backward-compat alias — existing callers (app.py) use the old name.
+# Delete this once those callers migrate.
+fetch_lass_airbox = fetch_citizen_sensors
+
+
+
+def fetch_epa_historical(api_key: str | None, hours_back: int = 24) -> pd.DataFrame | None:
+    """Pull EPA aqx_p_488 (hourly history). Returns a long-format DataFrame
+    with columns: timestamp, city_id, aqi, PM2.5, PM10, O3, NO2, SO2, CO.
+    None on failure.
+
+    We grab 2 pages (limit=1000, offset=0/1000) sorted by datacreationdate desc
+    to cover ~24 h × 77 stations ≈ 1800 records.
+    """
+    if not api_key or not api_key.strip():
+        return None
+    records: list[dict] = []
+    try:
+        for offset in (0, 1000):
+            params = {
+                "api_key": api_key.strip(),
+                "limit":   1000,
+                "offset":  offset,
+                "sort":    "datacreationdate desc",
+                "format":  "JSON",
+            }
+            r = requests.get(EPA_HIST_URL, params=params, timeout=20)
+            r.raise_for_status()
+            body = r.json()
+            page = (body.get("records") if isinstance(body, dict) else None) or []
+            if not page:
+                break
+            records.extend(page)
+    except Exception:
+        return None
+    if not records:
+        return None
+
+    raw = pd.DataFrame(records)
+    cols = {
+        "county": _resolve_col(raw, "county", "County", "縣市"),
+        "ts":     _resolve_col(raw, "datacreationdate", "DataCreationDate", "publishtime", "PublishTime"),
+        "aqi":    _resolve_col(raw, "aqi", "AQI"),
+        "pm25":   _resolve_col(raw, "pm2.5", "PM2.5", "pm25"),
+        "pm10":   _resolve_col(raw, "pm10", "PM10"),
+        "o3":     _resolve_col(raw, "o3", "O3"),
+        "no2":    _resolve_col(raw, "no2", "NO2"),
+        "so2":    _resolve_col(raw, "so2", "SO2"),
+        "co":     _resolve_col(raw, "co", "CO"),
+    }
+    if cols["county"] is None or cols["ts"] is None or cols["aqi"] is None:
+        return None
+
+    raw["_ts"] = pd.to_datetime(raw[cols["ts"]], errors="coerce")
+    raw = raw.dropna(subset=["_ts"])
+    cutoff = pd.Timestamp.now() - pd.Timedelta(hours=hours_back + 1)
+    raw = raw[raw["_ts"] >= cutoff]
+
+    rows: list[dict] = []
+    for county, sdf in raw.groupby(cols["county"]):
+        city_id = COUNTY_TO_CITY_ID.get(str(county))
+        if not city_id:
+            continue
+        for ts, hdf in sdf.groupby(sdf["_ts"].dt.floor("h")):
+            def m(key):
+                c = cols.get(key)
+                if c is None: return None
+                v = pd.to_numeric(hdf[c], errors="coerce").dropna()
+                return float(v.mean()) if len(v) else None
+            aqi = m("aqi")
+            if aqi is None or aqi <= 0:
+                continue
+            rows.append({
+                "timestamp": ts.to_pydatetime(),
+                "city_id":   city_id,
+                "city":      CITY_BY_ID[city_id]["name"],
+                "region":    CITY_BY_ID[city_id]["region"],
+                "aqi":       round(aqi, 1),
+                "PM2.5":     round(m("pm25") or 0, 1),
+                "PM10":      round(m("pm10") or 0, 1),
+                "O3":        round(m("o3") or 0, 1),
+                "NO2":       round(m("no2") or 0, 1),
+                "SO2":       round(m("so2") or 0, 2),
+                "CO":        round(m("co") or 0, 2),
+                "risk":      0.0,
+            })
+    return pd.DataFrame(rows) if rows else None
+
+
+def fetch_open_meteo_aq_batch(
+    cities: list[dict],
+    past_days: int = 1,
+    forecast_days: int = 1,
+) -> pd.DataFrame | None:
+    """Fetch hourly air quality from Open-Meteo (Copernicus CAMS model)
+    for many cities in a single request. Returns a long-format DataFrame
+    with columns: timestamp, city_id, aqi, PM2.5, PM10, O3, NO2, SO2, CO,
+    is_forecast (bool), source='cams'. Free, no key required."""
+    if not cities:
+        return None
+    lats = ",".join(f"{c['lat']:.4f}" for c in cities)
+    lons = ",".join(f"{c['lon']:.4f}" for c in cities)
+    try:
+        r = requests.get(
+            OPEN_METEO_AQ_URL,
+            params={
+                "latitude":      lats,
+                "longitude":     lons,
+                "hourly":        "pm2_5,pm10,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone,us_aqi",
+                "past_days":     past_days,
+                "forecast_days": forecast_days,
+                "timezone":      "Asia/Taipei",
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        body = r.json()
+    except Exception:
+        return None
+
+    # Single-location response is a dict; batch is a list. Normalize.
+    locations = body if isinstance(body, list) else [body]
+    if len(locations) != len(cities):
+        # Mismatch — fall back to whatever we got, paired by index
+        cities = cities[:len(locations)]
+    now_naive = datetime.now()
+    rows: list[dict] = []
+    for city, loc in zip(cities, locations):
+        h = (loc.get("hourly") or {})
+        times    = h.get("time") or []
+        pm25_arr = h.get("pm2_5") or []
+        pm10_arr = h.get("pm10") or []
+        o3_arr   = h.get("ozone") or []
+        no2_arr  = h.get("nitrogen_dioxide") or []
+        so2_arr  = h.get("sulphur_dioxide") or []
+        co_arr   = h.get("carbon_monoxide") or []
+        aqi_arr  = h.get("us_aqi") or []
+        for i, t in enumerate(times):
+            try:
+                ts = datetime.fromisoformat(t)
+            except (ValueError, TypeError):
+                continue
+            def at(arr, i):
+                try:
+                    v = arr[i]
+                    return float(v) if v is not None else None
+                except (IndexError, TypeError, ValueError):
+                    return None
+            aqi = at(aqi_arr, i)
+            pm25 = at(pm25_arr, i)
+            if aqi is None and pm25 is None:
+                continue
+            # Quick risk score using the same weighted blend that EPA-real
+            # snapshots use (PM2.5 dominates). Keeps the column shape in
+            # parity with EPA history so downstream code (e.g. the time
+            # scrubber merge in app.py) doesn't break when CAMS is the
+            # ts_df source.
+            pm25_v = pm25 or 0.0
+            pm10_v = at(pm10_arr, i) or 0.0
+            o3_v   = at(o3_arr, i)   or 0.0
+            no2_v  = at(no2_arr, i)  or 0.0
+            so2_v  = at(so2_arr, i)  or 0.0
+            co_v   = (at(co_arr, i) or 0.0) / 1000
+            aqi_v  = aqi or 0.0
+            _risk = (
+                0.40 * (pm25_v / 35) + 0.20 * (aqi_v / 150)
+                + 0.15 * (o3_v / 100) + 0.10 * (no2_v / 80)
+                + 0.08 * (so2_v / 30) + 0.07 * (co_v / 5)
+            )
+            _risk = min(100.0, max(0.0, _risk * 100))
+            rows.append({
+                "timestamp":   ts,
+                "city_id":     city["id"],
+                "city":        city["name"],
+                "region":      city["region"],
+                "aqi":         round(aqi, 1) if aqi is not None else None,
+                "PM2.5":       round(pm25, 1) if pm25 is not None else None,
+                "PM10":        round(pm10_v, 1),
+                "O3":          round(o3_v, 1),
+                "NO2":         round(no2_v, 1),
+                "SO2":         round(so2_v, 2),
+                "CO":          round(co_v, 2),
+                "risk":        round(_risk, 1),
+                "is_forecast": ts > now_naive,
+                "source":      "cams",
+            })
+    return pd.DataFrame(rows) if rows else None
+
+
+def send_discord_webhook(
+    url: str,
+    snapshot: pd.DataFrame,
+    critic_score: float | None,
+    data_mode: str = "real",
+) -> tuple[bool, str]:
+    """POST a Pipeline-summary embed to a Discord channel webhook.
+    Returns (success, message). No-op (returns False, reason) if url is blank."""
+    url = (url or "").strip()
+    if not url:
+        return False, "未填 Discord webhook URL"
+    if snapshot is None or snapshot.empty:
+        return False, "Snapshot 為空"
+
+    try:
+        avg   = float(snapshot["aqi"].mean())
+        worst = snapshot.sort_values("aqi", ascending=False).iloc[0]
+        best  = snapshot.sort_values("aqi").iloc[0]
+    except Exception as e:
+        return False, f"Snapshot parse: {type(e).__name__}"
+
+    mode_tag = "LIVE" if data_mode == "real" else "MOCK"
+    score_str = f"{critic_score:.1f}/100" if isinstance(critic_score, (int, float)) else "—"
+    embed = {
+        "title": "🦞 LobsterAQI Pipeline 摘要",
+        "description": f"資料來源：{mode_tag} · 覆蓋 {len(snapshot)} 城市",
+        "color": 0x00d9ff,
+        "fields": [
+            {"name": "全國平均 AQI", "value": f"**{avg:.1f}**",
+             "inline": True},
+            {"name": "最高城市", "value": f"{worst['city']} ({worst['aqi']:.0f})",
+             "inline": True},
+            {"name": "最低城市", "value": f"{best['city']} ({best['aqi']:.0f})",
+             "inline": True},
+            {"name": "Critic 評分", "value": score_str, "inline": True},
+        ],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "footer": {"text": "LobsterAQI · Taiwan Multi-Agent Air Quality Platform"},
+    }
+    try:
+        r = requests.post(url, json={"embeds": [embed]}, timeout=8)
+        ok = r.status_code in (200, 204)
+        return ok, f"HTTP {r.status_code}" + ("" if ok else f" · {r.text[:120]}")
+    except requests.exceptions.Timeout:
+        return False, "Webhook 逾時"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)[:80]}"
+
+
+# =============================================================================
 # Direct multi-provider LLM helpers
 # (OpenClaw is kept for cron push / Discord-LINE binding / MEMORY.md, but
 #  in-app LLM calls go straight to provider HTTP APIs — much faster than
@@ -630,28 +1173,24 @@ LLM_PROVIDERS: dict[str, dict[str, str]] = {
         "default_model": "claude-sonnet-4-6",
         "base_url":      "",
     },
-    # MiniMax has two regional platforms with the same API format but
-    # account/key are NOT cross-compatible:
-    #   - International (platform.minimaxi.chat) → api.minimaxi.chat
-    #   - China         (platform.minimax.chat)  → api.minimax.chat
-    # We default to international since that's where MiniMax-M1/M2 lives.
+    # Google Gemini exposes an OpenAI-compatible endpoint at
+    # /v1beta/openai/chat/completions — same request shape as everything
+    # below, so it slots right into the generic OpenAI-format branch.
+    # Get an API key at https://aistudio.google.com/apikey (free tier).
+    "gemini": {
+        "name":          "Google Gemini",
+        "placeholder":   "AIza...",
+        "default_model": "gemini-2.5-flash",
+        "base_url":      "https://generativelanguage.googleapis.com/v1beta/openai",
+    },
+    # MiniMax (international, where M1 / M2 / abab models live). Sign up at
+    # platform.minimaxi.chat; the China platform (api.minimax.chat) is a
+    # separate account system and we don't ship that switch here anymore.
     "minimax": {
         "name":          "MiniMax (國際版)",
         "placeholder":   "eyJ...",
         "default_model": "MiniMax-M2.7",
         "base_url":      "https://api.minimaxi.chat/v1",
-    },
-    "minimax_cn": {
-        "name":          "MiniMax (中國版)",
-        "placeholder":   "eyJ...",
-        "default_model": "abab6.5s-chat",
-        "base_url":      "https://api.minimax.chat/v1",
-    },
-    "deepseek": {
-        "name":          "DeepSeek",
-        "placeholder":   "sk-...",
-        "default_model": "deepseek-chat",
-        "base_url":      "https://api.deepseek.com/v1",
     },
     "openai": {
         "name":          "OpenAI",
@@ -714,8 +1253,11 @@ def call_llm_api(
     prompt: str,
     model: str,
     base_url: str = "",
-    system: str = "你是台灣空氣品質監測專家，根據 AQI 數據提供準確、有依據的健康建議。回覆請使用繁體中文，簡潔有力。",
-    max_tokens: int = 600,
+    system: str = "你是台灣空氣品質監測專家，根據 AQI 數據提供準確、有依據的健康建議。回覆請使用繁體中文。",
+    # Default cap is generous (~4k output tokens). Callers can pass a higher
+    # number for long-form responses; we deliberately don't enforce shorter
+    # replies by default — users repeatedly asked for unbounded LLM output.
+    max_tokens: int = 4096,
     timeout: int = 30,
 ) -> str | None:
     """
@@ -734,25 +1276,51 @@ def call_llm_api(
     key = api_key.strip()
     mdl = (model or "").strip() or LLM_PROVIDERS.get(provider, {}).get("default_model", "")
 
+    # HTTP statuses commonly transient — worth one quick retry. Gemini in
+    # particular returns 503 UNAVAILABLE during peak demand.
+    _RETRYABLE = {429, 500, 502, 503, 504}
+
+    def _short_err_message(text: str) -> str:
+        """Pull a human-readable message out of a JSON error body."""
+        try:
+            body = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return text[:180]
+        if isinstance(body, list) and body:
+            body = body[0]
+        if isinstance(body, dict):
+            err = body.get("error", body)
+            if isinstance(err, dict):
+                msg = err.get("message") or err.get("status") or ""
+                if msg:
+                    return str(msg)[:180]
+        return text[:180]
+
     try:
         if provider == "anthropic":
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": mdl or "claude-sonnet-4-6",
-                    "max_tokens": max_tokens,
-                    "system": system,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=timeout,
-            )
+            r = None
+            for attempt in (1, 2):
+                r = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": mdl or "claude-sonnet-4-6",
+                        "max_tokens": max_tokens,
+                        "system": system,
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                    timeout=timeout,
+                )
+                if r.status_code in _RETRYABLE and attempt == 1:
+                    time.sleep(1.5)
+                    continue
+                break
             if r.status_code >= 400:
-                LAST_LLM_ERROR = f"Anthropic HTTP {r.status_code} · {r.text[:200]}"
+                LAST_LLM_ERROR = f"Anthropic HTTP {r.status_code} · {_short_err_message(r.text)}"
                 return None
             data = r.json()
             try:
@@ -766,21 +1334,27 @@ def call_llm_api(
             if not url:
                 LAST_LLM_ERROR = f"{provider} 沒設定 base_url"
                 return None
-            r = requests.post(
-                f"{url}/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={
-                    "model": mdl,
-                    "max_tokens": max_tokens,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user",   "content": prompt},
-                    ],
-                },
-                timeout=timeout,
-            )
+            r = None
+            for attempt in (1, 2):
+                r = requests.post(
+                    f"{url}/chat/completions",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={
+                        "model": mdl,
+                        "max_tokens": max_tokens,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user",   "content": prompt},
+                        ],
+                    },
+                    timeout=timeout,
+                )
+                if r.status_code in _RETRYABLE and attempt == 1:
+                    time.sleep(1.5)
+                    continue
+                break
             if r.status_code >= 400:
-                LAST_LLM_ERROR = f"{provider} HTTP {r.status_code} · {r.text[:200]}"
+                LAST_LLM_ERROR = f"{provider} HTTP {r.status_code} · {_short_err_message(r.text)}"
                 return None
             data = r.json()
             try:

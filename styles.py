@@ -224,7 +224,8 @@ button[kind="primary"] {
    Why: type="password" triggers Chrome's "save password?" popup + later autofill.
    We use type="default" (so Chrome ignores it) + CSS to visually mask the chars. */
 .st-key-masked_llm_key input,
-.st-key-masked_epa_key input {
+.st-key-masked_epa_key input,
+.st-key-masked_discord_url input {
   -webkit-text-security: disc !important;
   -moz-text-security: disc !important;
   text-security: disc !important;
@@ -510,13 +511,18 @@ AGENT_STAGE_CSS = """
     linear-gradient(180deg, #0a1228 0%, #050a18 100%);
   border: 1px solid rgba(0, 217, 255, 0.25);
   border-radius: 18px;
-  padding: 1.8rem 1.4rem 1.4rem 1.4rem;
+  padding: 1.8rem 1.0rem 1.2rem 1.0rem;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 1rem;
+  /* Force 3 in a row so the three lobsters line up neatly across the
+     full office width. Fall back to 1×3 on very narrow screens. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
   image-rendering: pixelated;
   position: relative;
   min-height: 320px;
+}
+@media (max-width: 720px) {
+  .office { grid-template-columns: 1fr; }
 }
 .office::before {
   content: 'PIXEL OFFICE · LOBSTER AGENTS';
@@ -542,34 +548,45 @@ AGENT_STAGE_CSS = """
   background: rgba(15, 24, 48, 0.95);
   border: 1px solid var(--bubble-color, #00d9ff);
   border-radius: 10px;
-  padding: 0.45rem 0.7rem;
-  font-size: 0.72rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.7rem;
   color: #e8eef7;
-  margin-bottom: 0.5rem;
+  /* Tight gap below so the speech-tail visually meets the lobster's head
+     without an awkward floating distance. */
+  margin-bottom: 0.15rem;
   position: relative;
-  width: 200px;                       /* fixed width — uniform across desks */
-  height: 3rem;                       /* fixed height — uniform across desks */
+  width: 100%;
+  max-width: 200px;
+  min-height: 3rem;
   box-sizing: border-box;
   text-align: center;
   box-shadow: 0 0 14px var(--bubble-glow, rgba(0, 217, 255, 0.4));
   animation: bubbleIn 0.4s ease-out;
   overflow: hidden;
-  display: -webkit-box;               /* clamp text to 2 lines */
+  display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   line-height: 1.25;
+  word-break: break-word;
 }
 .bubble::after {
   content: '';
-  position: absolute; bottom: -6px; left: 50%;
+  position: absolute;
+  /* Tail extends slightly past the bubble so it sits between bubble and
+     the lobster's head — not the desk monitor box below. */
+  bottom: -7px; left: 50%;
   transform: translateX(-50%);
-  border: 6px solid transparent;
+  border: 7px solid transparent;
   border-top-color: var(--bubble-color, #00d9ff);
 }
+/* Empty state — fully hidden, takes no visual space (no faint outline,
+   no margin). The desk's flex layout keeps the lobster anchored at the
+   bottom regardless. */
 .bubble.empty {
   opacity: 0;
   border: 1px dashed transparent;
   box-shadow: none;
+  visibility: hidden;
 }
 .bubble.empty::after { border-top-color: transparent; }
 @keyframes bubbleIn {
@@ -582,6 +599,9 @@ AGENT_STAGE_CSS = """
   filter: grayscale(0.6) brightness(0.7);
   transition: filter 0.4s, transform 0.3s, text-shadow 0.4s;
   line-height: 1;
+  /* Lift the emoji a hair so the speech-bubble tail visually lands on the
+     lobster's head, not on empty space above it. */
+  margin-top: -0.25rem;
 }
 .lobster.active {
   filter: none;
@@ -646,6 +666,11 @@ AGENT_STAGE_CSS = """
   text-align: center;
   max-width: 170px;
   line-height: 1.35;
+  /* Reserve 2 lines of description height so desks whose desc happens to
+     fit on 1 line (e.g. 預警員's short blurb) still match the height of
+     the 2-line desks (採集者 / 分析師). Without this, `justify-content:
+     flex-end` on .desk pushes the shorter desk's lobster downward. */
+  min-height: calc(0.66rem * 1.35 * 2);
 }
 
 /* Browser screenshot viewport */
@@ -835,10 +860,15 @@ AGENT_STAGE_CSS = """
 }
 
 /* Compact 2×2 grid of agent reports under the lobster theater.
-   Uniform font / spacing across all 4 cards. Body preserves line breaks. */
+   Each card is a <details> element — collapsed shows role + 1-sentence
+   preview; click expands to the full LLM reply. This keeps the dashboard
+   sections below from getting pushed down by long Gemini responses. */
 .agent-report-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  /* align-items: start prevents one card's expansion from stretching the
+     other card in the same grid row — each <details> grows independently. */
+  align-items: start;
   gap: 0.6rem;
   margin-top: 0.35rem;
 }
@@ -847,23 +877,75 @@ AGENT_STAGE_CSS = """
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-left: 3px solid var(--accent);
   border-radius: 10px;
-  padding: 0.6rem 0.8rem;
+  padding: 0.55rem 0.8rem;
+  transition: border-color 0.15s ease, box-shadow 0.2s ease;
 }
+.agent-report:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.agent-report[open] {
+  /* Subtle highlight when expanded so the user can see which one's open */
+  box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.agent-report summary {
+  cursor: pointer;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "head toggle" "preview toggle";
+  column-gap: 0.6rem;
+  row-gap: 0.2rem;
+  align-items: start;
+}
+.agent-report summary::-webkit-details-marker,
+.agent-report summary::marker { display: none; content: ''; }
+
 .agent-report-head {
+  grid-area: head;
   font-family: 'JetBrains Mono', monospace;
   font-weight: 700;
   font-size: 0.72rem;
   letter-spacing: 0.08em;
-  margin-bottom: 0.35rem;
 }
 .agent-report-label {
   color: #8b95a8;
   font-weight: 500;
   letter-spacing: 0;
 }
+.agent-report-preview {
+  grid-area: preview;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #c0c8d8;
+  /* Clamp to 2 lines max in the collapsed preview so all 4 cards stay
+     the same compact height regardless of how chatty Gemini is. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.agent-report-toggle {
+  grid-area: toggle;
+  align-self: end;
+  font-size: 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  opacity: 0.75;
+  padding-left: 0.5rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  user-select: none;
+}
+.agent-report:not([open]) .agent-report-toggle::before { content: '▶ 看詳細'; }
+.agent-report[open] .agent-report-toggle::before { content: '▼ 收合'; }
+
 .agent-report-body {
+  margin-top: 0.55rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.10);
   font-size: 0.8rem;
-  line-height: 1.55;
+  line-height: 1.6;
   color: #c0c8d8;
   white-space: pre-wrap;
   word-break: break-word;
@@ -897,48 +979,239 @@ AGENT_STAGE_CSS = """
   bottom: 24px !important;
   right: 24px !important;
   z-index: 99999 !important;
-  width: 400px !important;
-  max-height: 600px !important;
+  width: 440px !important;
+  /* Pinned at full height from the moment the panel opens — using `height`
+     (not max-height) so it never collapses to content. The calc clamp keeps
+     it inside the viewport on smaller laptop screens. */
+  height: 640px !important;
+  max-height: calc(100vh - 60px) !important;
   background: rgba(10, 18, 40, 0.97) !important;
   -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
   border: 1px solid rgba(0, 217, 255, 0.35) !important;
   border-radius: 18px !important;
-  padding: 14px 16px !important;
+  padding: 14px 16px 18px !important;
   box-shadow:
     0 20px 50px rgba(0, 0, 0, 0.7),
     0 0 40px rgba(0, 217, 255, 0.18) !important;
-  overflow-y: auto !important;
+  /* The panel itself doesn't scroll — only the inner history container does.
+     This pins the chat-input to the bottom and the contact bar to the top. */
+  overflow: hidden !important;
   display: flex !important;
   flex-direction: column !important;
   gap: 0.3rem;
 }
-/* Close-button inside the panel: small, top-right */
-.st-key-floating_chat .stButton > button {
-  background: rgba(255, 71, 87, 0.15) !important;
-  color: #ff4757 !important;
-  border: 1px solid rgba(255, 71, 87, 0.3) !important;
-  border-radius: 8px !important;
-  padding: 4px 8px !important;
-  font-size: 0.85rem !important;
+/* LINE-style contact bar at top of expanded chat panel */
+.line-contact-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.45rem 0.5rem 0.7rem 0.2rem;
+  margin: -4px -6px 0.45rem -6px;     /* extend to panel edges */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-right: 44px;                /* leave room for the absolute close btn */
+}
+.line-contact-avatar {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ff6b35, #ff8c42);
+  box-shadow: 0 0 12px rgba(255, 107, 53, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; line-height: 1;
+  flex-shrink: 0;
+  border: 2px solid rgba(255, 255, 255, 0.08);
+}
+.line-contact-info { flex: 1; min-width: 0; }
+.line-contact-name {
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: #e8eef7;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.line-contact-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #8b95a8;
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+.line-status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #00e676;
+  box-shadow: 0 0 6px rgba(0, 230, 118, 0.7);
+  animation: linePulse 1.6s ease-in-out infinite;
+}
+@keyframes linePulse {
+  0%,100% { opacity: 1; transform: scale(1); }
+  50%     { opacity: 0.55; transform: scale(0.85); }
+}
+
+/* Close button inside the panel: target by widget key for precision.
+   Streamlit (>=1.40) adds class `.st-key-<key>` on the wrapper div of any
+   widget that has a key argument — so .st-key-chat_close hits our ✕ button
+   wrapper exactly, without leaking to chat-input or expander toggle buttons. */
+.st-key-floating_chat .st-key-chat_close {
+  position: absolute !important;
+  top: 10px !important;
+  right: 10px !important;
+  width: 32px !important;
+  height: 32px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 1000 !important;
+}
+.st-key-floating_chat .st-key-chat_close > div,
+.st-key-floating_chat .st-key-chat_close button {
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  min-height: 32px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 50% !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #c0c8d8 !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  font-size: 0.92rem !important;
   font-weight: 700 !important;
-  min-width: 0 !important;
+  line-height: 1 !important;
   box-shadow: none !important;
   animation: none !important;
+  /* Snap hover/active states immediately — no inherited 0.22s transition.
+     Long transitions made the close look "twitchy" because the panel got
+     unmounted mid-animation when Streamlit re-ran after the click. */
+  transition: background-color 80ms ease, color 80ms ease, border-color 80ms ease !important;
+  transform: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
 }
-.st-key-floating_chat .stButton > button:hover {
-  background: rgba(255, 71, 87, 0.25) !important;
+.st-key-floating_chat .st-key-chat_close button:hover {
+  background: rgba(255, 71, 87, 0.20) !important;
+  color: #ff4757 !important;
+  border-color: rgba(255, 71, 87, 0.5) !important;
   transform: none !important;
   box-shadow: none !important;
 }
-/* Chat input inside the floating panel — keep it compact */
-.st-key-floating_chat [data-testid="stChatInput"] {
-  margin-top: 0.4rem;
+.st-key-floating_chat .st-key-chat_close button:active,
+.st-key-floating_chat .st-key-chat_close button:focus {
+  /* Kill the focus ring and the active-state translateY that .stButton's
+     base style would otherwise apply on press — keeps the click visually
+     stable through the Streamlit rerun. */
+  transform: none !important;
+  box-shadow: 0 0 0 2px rgba(255, 71, 87, 0.35) !important;
+  outline: none !important;
 }
-/* Scrollbar inside the chat panel */
-.st-key-floating_chat::-webkit-scrollbar { width: 6px; }
-.st-key-floating_chat::-webkit-scrollbar-thumb { background: rgba(0, 217, 255, 0.25); border-radius: 3px; }
-.st-key-floating_chat::-webkit-scrollbar-track { background: transparent; }
+/* Chat input inside the floating panel.
+   `margin-top: auto` + `flex-shrink: 0` + `order: 99` guarantee the input
+   is always pinned to the very bottom of the flex column, regardless of
+   how short the conversation history is or how Streamlit re-orders the
+   DOM after a rerun. */
+.st-key-floating_chat [data-testid="stChatInput"] {
+  margin-top: auto !important;
+  flex-shrink: 0 !important;
+  order: 99 !important;
+}
+.st-key-floating_chat [data-testid="stChatInput"] textarea {
+  min-height: 44px !important;
+  padding: 11px 14px !important;
+  font-size: 0.88rem !important;
+  line-height: 1.4 !important;
+  border-radius: 14px !important;
+}
+.st-key-floating_chat [data-testid="stChatInput"] > div {
+  border-radius: 14px !important;
+}
+/* Slightly larger submit button (↑) to match the taller input */
+.st-key-floating_chat [data-testid="stChatInput"] button {
+  width: 34px !important;
+  height: 34px !important;
+}
+/* Inner scroll container: only the history scrolls, the contact bar above
+   and the chat input below stay pinned. `flex: 1` claims all remaining
+   vertical space; `min-height: 0` lets overflow-y actually engage inside
+   a flex parent. Inner flex with `justify-content: flex-end` anchors the
+   welcome message (and short conversations) to the bottom, right above
+   the input — matching LINE's UX. */
+.st-key-chat_history {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  padding-right: 4px;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-end !important;
+  order: 1 !important;
+}
+.st-key-chat_history::-webkit-scrollbar { width: 6px; }
+.st-key-chat_history::-webkit-scrollbar-thumb { background: rgba(0, 217, 255, 0.25); border-radius: 3px; }
+.st-key-chat_history::-webkit-scrollbar-track { background: transparent; }
+
+/* Per-message references row — under each bot reply, indented to align with
+   the bubble (avatar 32 + gap 8 ≈ 42px). Collapsed by default via <details>. */
+.line-refs-row {
+  display: flex;
+  padding-left: 42px;
+  margin-top: -2px;
+  margin-bottom: 0.2rem;
+  max-width: 100%;
+}
+.line-bubble-refs {
+  background: transparent;
+  border-radius: 8px;
+  max-width: 78%;
+  min-width: 0;
+}
+.line-bubble-refs summary {
+  font-size: 0.7rem;
+  color: #9b59ff;
+  cursor: pointer;
+  list-style: none;
+  padding: 3px 9px;
+  background: rgba(155, 89, 255, 0.10);
+  border: 1px solid rgba(155, 89, 255, 0.25);
+  border-radius: 8px;
+  user-select: none;
+  display: inline-block;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.line-bubble-refs summary::-webkit-details-marker { display: none; }
+.line-bubble-refs summary::marker { content: ''; }
+.line-bubble-refs[open] summary::before { content: '▼ '; opacity: 0.7; }
+.line-bubble-refs:not([open]) summary::before { content: '▶ '; opacity: 0.7; }
+.line-bubble-refs .ref-list {
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: rgba(155, 89, 255, 0.06);
+  border-left: 2px solid #9b59ff;
+  border-radius: 0 8px 8px 0;
+}
+.line-bubble-refs .ref-item {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  padding: 3px 0;
+}
+.line-bubble-refs .ref-item + .ref-item {
+  border-top: 1px dashed rgba(155, 89, 255, 0.15);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+.line-bubble-refs .ref-source {
+  color: #9b59ff;
+  font-weight: 700;
+  font-size: 0.7rem;
+}
+.line-bubble-refs .ref-quote {
+  color: #c0c8d8;
+  margin-top: 2px;
+}
 @media (max-width: 768px) {
   .st-key-floating_chat { width: calc(100vw - 32px) !important; right: 16px !important; }
 }
@@ -947,9 +1220,31 @@ AGENT_STAGE_CSS = """
 .line-chat-stream {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.4rem;                /* LINE has tight inter-message spacing */
   padding: 0.4rem 0.1rem 0.6rem;
 }
+
+/* Date separator at top of conversation (LINE-style centered pill) */
+.line-date-separator {
+  display: flex;
+  justify-content: center;
+  margin: 0.3rem 0 0.5rem 0;
+}
+.line-date-separator span {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #8b95a8;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+}
+
+/* A row: bot side = avatar + bubble + time | user side = time + bubble.
+   align-items: flex-end so the timestamp lines up with the bottom of the
+   bubble (LINE convention). */
 .line-row {
   display: flex;
   align-items: flex-end;
@@ -960,32 +1255,40 @@ AGENT_STAGE_CSS = """
 .line-row-me  { justify-content: flex-end; }
 
 .line-avatar {
-  flex: 0 0 28px;
-  width: 28px; height: 28px;
+  flex: 0 0 32px;
+  width: 32px; height: 32px;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1;
+  align-self: flex-end;
 }
 .line-avatar-bot {
   background: linear-gradient(135deg, #ff6b35, #ff8c42);
   box-shadow: 0 0 8px rgba(255, 107, 53, 0.55);
 }
+/* .line-avatar-me kept defined but unused — LINE doesn't show your own
+   avatar in your own chat. Leaving the class to avoid breakage if anyone
+   re-introduces it. */
 .line-avatar-me {
   background: linear-gradient(135deg, #00d9ff, #0fa8d0);
   box-shadow: 0 0 8px rgba(0, 217, 255, 0.55);
 }
 
+/* Bubble = the message body. Max-width is set here directly because
+   .line-bubble is now a flex child of .line-row (no longer wrapped in a
+   group). The cap at 70% leaves room for the timestamp + avatar on the
+   400px-wide panel. */
 .line-bubble {
-  max-width: 76%;
-  padding: 0.55rem 0.75rem;
+  padding: 0.5rem 0.7rem;
   border-radius: 14px;
   font-size: 0.84rem;
-  line-height: 1.55;
+  line-height: 1.5;
   color: #e6ebf2;
   word-wrap: break-word;
   white-space: pre-wrap;
   position: relative;
+  max-width: 70%;
 }
 .line-bubble-bot {
   background: rgba(255, 255, 255, 0.07);
@@ -997,6 +1300,45 @@ AGENT_STAGE_CSS = """
   border: 1px solid rgba(6, 199, 85, 0.55);
   border-bottom-right-radius: 4px;
   color: #ffffff;
+}
+
+/* Timestamp beside each bubble (LINE convention: time is to the right of
+   bot bubbles and to the left of user bubbles). align-items: flex-end on
+   .line-row keeps it level with the bubble's bottom edge. */
+.line-bubble-time {
+  font-size: 0.6rem;
+  color: #6a7080;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-bottom: 3px;
+  user-select: none;
+}
+
+/* Typing-indicator bubble: same styling as a bot bubble, but the content
+   is three dots that bounce in sequence to mimic "the assistant is thinking" */
+.line-bubble-typing {
+  padding: 0.65rem 0.95rem !important;
+  min-height: 1.25rem;
+}
+.line-typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.line-typing-dots span {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #8b95a8;
+  opacity: 0.4;
+  animation: typingDot 1.4s ease-in-out infinite;
+}
+.line-typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.line-typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typingDot {
+  0%, 100% { opacity: 0.35; transform: translateY(0); }
+  30%      { opacity: 1;   transform: translateY(-3px); }
 }
 
 /* Floating AI assistant FAB — Streamlit-native button, fixed bottom-right */
