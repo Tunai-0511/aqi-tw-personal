@@ -1,18 +1,48 @@
 """
-Mock data generators for the Taiwan AQI multi-agent monitoring system.
-All values are synthetic and meant for demo purposes only.
+資料層 (Data Layer) — LobsterAQI 的核心資料模組
+============================================================
+
+本檔案包含三大類功能:
+
+1. **靜態參考資料 (Static Reference Data)**
+   - `CITIES`:台灣 20 個縣市的基礎資料(中英文名、區域、經緯度、AQI bias 係數)
+   - `AQI_LEVELS`:6 個 AQI 等級的閾值、中文名、顏色、健康建議
+   - `POLLUTANTS`:6 種主要污染物清單
+   - `SENSITIVE_GROUPS` / `GROUP_ADVICE` / `OUTDOOR_ACTIVITIES`:UI 配置
+
+2. **合成資料生成器 (Synthetic Generators)** — Mock fallback
+   - `generate_current_snapshot()`:整批 20 城市的當下 AQI 模擬
+   - `generate_time_series()`:24h 時序模擬
+   - `best_outdoor_hours()`:12h 戶外時段推薦
+   - 這些函式只在 EPA API 失敗時被呼叫做 fallback,
+     使用 `np.random` 加 `_diurnal_factor` (日夜峰值模型) 產生合理的假資料
+
+3. **真實 API 抓取器 (Real API Fetchers)**
+   - `fetch_epa_realtime()`:環境部 EPA aqx_p_432 即時資料
+   - `fetch_epa_historical()`:環境部 EPA aqx_p_488 24h 歷史
+   - `fetch_open_meteo_*()`:Open-Meteo 氣象 + CAMS 大氣化學模式(免金鑰)
+   - `fetch_citizen_sensors()`:民生公共物聯網 + LASS-net Airbox 民間感測器
+   - `generate_real_snapshot()`:整合上述 API 產出真實的「當下快照」
+   - `generate_real_timeseries()`:整合產出真實的「24h 時序」
+   - `call_llm_api()`:呼叫各家 LLM(Anthropic / Gemini / MiniMax / OpenAI / 自訂)
+   - `send_discord_webhook()`:Pipeline 完成後推送摘要到 Discord
+
+備註: 此檔案早期是純 mock 生成器(docstring 寫的就是這樣),後來逐步加入
+真實 API 後,mock 變成「fallback 安全網」而非主要路徑。`app.py:603-609`
+顯示了切換邏輯:EPA 成功 → real;失敗 → mock,並在 UI 標示 'MOCK 模擬資料'。
 """
 
 from __future__ import annotations
 
-# Use the OS certificate store (Windows / macOS keychain) instead of certifi's
-# bundled CA list. Required for environments where OpenSSL 3.5+ rejects certs
-# missing the Subject Key Identifier extension (e.g. Taiwan MOENV's TWCA cert).
-# Must run BEFORE `import requests` so urllib3's SSL context picks it up.
+# 使用作業系統的憑證儲存區(Windows certmgr / macOS Keychain),而非 certifi 內建的 CA 清單。
+# 在 OpenSSL 3.5+ 環境下,certifi 的 CA 對某些憑證(例:台灣 MOENV 的 TWCA)會因為
+# 缺少 Subject Key Identifier extension 而被拒。改用 OS 憑證可避開此問題。
+# 必須在 `import requests` 之前執行,因為 urllib3 在 import 時就會固定 SSL context。
 try:
     import truststore
     truststore.inject_into_ssl()
 except ImportError:
+    # truststore 套件選裝;裝失敗就 fallback 到 certifi 預設行為
     pass
 
 import json
@@ -27,10 +57,20 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-# ---------------------------------------------------------------------------
-# Static reference data
-# ---------------------------------------------------------------------------
+# ─── 靜態參考資料 (Static Reference Data) ─────────────────────────────────
+# 以下三個常數是整個系統的基礎事實來源 — 對其他模組是 read-only。
+# 變更這些值需確認上下游(charts.py / app.py / _city_detail.py)的對應邏輯。
+# ─────────────────────────────────────────────────────────────────────────
 
+# 台灣 20 縣市清單(含本島 17 + 離島 3)。
+# 每個 dict 的欄位:
+#   id     英文 slug,作為 DataFrame 的 city_id 主鍵
+#   name   中文名,顯示給使用者看
+#   en     英文官方名
+#   region 北/中/南/東/離島 — 用於區域聚合與統計
+#   lat,lon 地圖標點座標(EPSG:4326)
+#   bias   AQI 模擬時的城市偏差係數 — 工業城市較高、東部 / 離島較低,
+#          僅在 mock fallback 時使用。
 CITIES: list[dict[str, Any]] = [
     # 北部
     {"id": "taipei",     "name": "台北市", "en": "Taipei",     "region": "北部", "lat": 25.03, "lon": 121.57, "bias": 0.95},
@@ -59,10 +99,20 @@ CITIES: list[dict[str, Any]] = [
     {"id": "matsu",      "name": "連江縣", "en": "Matsu",      "region": "離島", "lat": 26.16, "lon": 119.95, "bias": 1.05},
 ]
 
+# id → city dict 的快速查表;遠比每次 `next(c for c in CITIES if c["id"]==x)` 快
 CITY_BY_ID = {c["id"]: c for c in CITIES}
 
+# 6 種主要污染物的標準順序 — 用於雷達圖、堆疊圖、表格欄位順序的單一來源
 POLLUTANTS = ["PM2.5", "PM10", "O3", "NO2", "SO2", "CO"]
 
+# AQI 6 級分級表(對齊台灣 EPA / US EPA 國際標準的 0-500 制)。
+# 順序很重要 — aqi_to_level() 從上往下找第一個 aqi <= max 的等級。
+# 每級包含:
+#   max    該級的 AQI 上限
+#   name   中文等級名(顯示用)
+#   color  Hex 色碼(全應用統一)
+#   level  數字級別 1-6(便於排序 / 篩選)
+#   advice 短文字健康建議(LLM 失敗時的 fallback)
 AQI_LEVELS = [
     {"max":  50, "name": "良好",            "color": "#00e676", "level": 1, "advice": "空氣品質良好，適合戶外活動"},
     {"max": 100, "name": "普通",            "color": "#ffd93d", "level": 2, "advice": "極少數族群可能輕微不適，可正常活動"},
@@ -74,56 +124,104 @@ AQI_LEVELS = [
 
 
 def aqi_to_level(aqi: float) -> dict[str, Any]:
+    """把 AQI 數值轉成對應的等級 dict(含中文名、顏色、健康建議)。
+
+    線性掃描 AQI_LEVELS,回傳第一個 aqi <= lvl["max"] 的等級;
+    超過 300 直接回傳最後一級「危害」。
+
+    為什麼用線性掃描而非二分?因為只有 6 級,線性 O(6) 還比 bisect 的
+    overhead 更快,且程式碼直覺易讀。
+    """
     for lvl in AQI_LEVELS:
         if aqi <= lvl["max"]:
             return lvl
     return AQI_LEVELS[-1]
 
 
-# ---------------------------------------------------------------------------
-# Time-aware generators
-# ---------------------------------------------------------------------------
+# ─── 時間感知的合成生成器 (Time-aware Synthetic Generators) ──────────────
+# 這個區段的所有函式都是「mock fallback」 — 當 EPA API 失敗時才會被呼叫。
+# 它們不是真實資料,但用合理的數學模型(日夜雙峰、城市偏差、高斯噪聲)
+# 產生視覺上「看起來合理」的數值,確保即使無法連到 API 也能展示 UI。
+# ─────────────────────────────────────────────────────────────────────────
 
 
 def _diurnal_factor(hour: int) -> float:
-    """Two daily peaks: morning rush (~8am) and evening rush (~6pm)."""
-    morning = math.exp(-((hour - 8) ** 2) / 8)
-    evening = math.exp(-((hour - 18) ** 2) / 10)
+    """日夜雙峰模型 — 模擬 AQI 一天內的兩個尖峰(早 8 點 + 晚 6 點)。
+
+    用兩個 Gaussian 鐘形曲線疊加,代表早晚通勤造成的空污尖峰。
+    回傳值介於約 0.7(深夜低谷)到 1.6(尖峰),用乘法套用到 base AQI 上。
+
+    為什麼是 8am 與 6pm?台灣交通尖峰時間;PM 與 NOx 排放在這兩段大幅增加。
+    """
+    morning = math.exp(-((hour - 8) ** 2) / 8)     # 早 8 點為中心的鐘形,寬度 ~2.8h
+    evening = math.exp(-((hour - 18) ** 2) / 10)   # 晚 6 點為中心的鐘形,寬度 ~3.2h
     return 0.7 + 0.45 * (morning + evening)
 
 
 def _seed_for(city_id: str, ts: datetime) -> int:
+    """為「特定城市 + 特定小時」產生穩定的隨機種子。
+
+    用途:讓同一個城市在同一小時內,不管程式跑幾次,看到的「合成 AQI」
+    都是同一個數字 — 避免使用者每次 rerun 看到完全不同的值,造成困惑。
+
+    hash 後 AND 0xFFFFFFFF 確保結果為 32-bit unsigned int(NumPy rng 要求)。
+    """
     return hash((city_id, ts.strftime("%Y-%m-%d-%H"))) & 0xFFFFFFFF
 
 
 def generate_current_snapshot(now: datetime | None = None) -> pd.DataFrame:
-    """One row per city with the current AQI, pollutants, weather and risk."""
+    """產生 20 城市的合成「當下快照」(mock fallback)。
+
+    回傳一個 DataFrame,每個城市一列,欄位包括:
+      city_id, city, en, region, lat, lon                  ← 城市靜態資料
+      aqi, PM2.5, PM10, O3, NO2, SO2, CO                   ← 污染物
+      wind_dir, wind_speed, humidity, temp, pressure       ← 氣象
+      risk                                                  ← 加權風險分數 (0-100)
+      level, level_num, color                              ← AQI 分級資訊
+      updated_min_ago                                       ← 假的「X 分鐘前更新」(1-11)
+
+    ⚠ 此函式產出的所有數值都是合成 — 僅在 EPA API 失敗時用於 UI fallback。
+    呼叫者(app.py:637)會同步 set `data_mode='mock'` 讓 UI 標示「MOCK 模擬資料」。
+    """
     now = now or datetime.now()
     hour = now.hour
-    diurnal = _diurnal_factor(hour)
+    diurnal = _diurnal_factor(hour)   # 取得「目前小時的日夜倍率」(0.7~1.6)
 
     rows: list[dict[str, Any]] = []
     for city in CITIES:
+        # 每個城市 + 該小時 的種子,確保「同一小時不會看到完全不同的值」
         rng = np.random.default_rng(_seed_for(city["id"], now))
+
+        # ── AQI 計算 ──
+        # 基準 55 × 城市偏差(雲林 1.45 / 台東 0.45)× 日夜倍率,再加 N(0, 10) 噪聲
+        # 最後 clip 在 [15, 280] 範圍,避免出現負值或極端高(>300 應該是真實事件,不該被假資料模擬)
         base_aqi = 55 * city["bias"] * diurnal + rng.normal(0, 10)
         aqi = float(max(15, min(280, base_aqi)))
 
+        # ── 各污染物 ──
+        # 每個污染物都用「以 AQI 為基準的線性回歸 + 噪聲」做,模擬實際相關性
+        # PM2.5 大約是 AQI 的 0.45 倍(以美國 NowCast 換算約略對齊)
         pm25 = max(2.0, aqi * 0.45 + rng.normal(0, 4))
-        pm10 = max(5.0, pm25 * 1.6 + rng.normal(0, 6))
-        o3   = max(5.0, 40 + (aqi - 60) * 0.3 + rng.normal(0, 8))
-        no2  = max(2.0, 18 + aqi * 0.18 + rng.normal(0, 4))
-        so2  = max(0.5, 4 + aqi * 0.03 + rng.normal(0, 1.5))
-        co   = max(0.1, 0.4 + aqi * 0.006 + rng.normal(0, 0.1))
+        pm10 = max(5.0, pm25 * 1.6 + rng.normal(0, 6))            # PM10 通常是 PM2.5 的 1.5-1.8 倍
+        o3   = max(5.0, 40 + (aqi - 60) * 0.3 + rng.normal(0, 8)) # O3 與 AQI 弱正相關
+        no2  = max(2.0, 18 + aqi * 0.18 + rng.normal(0, 4))       # NO2 主要來自交通
+        so2  = max(0.5, 4 + aqi * 0.03 + rng.normal(0, 1.5))      # SO2 在台灣已很低(燃煤管制)
+        co   = max(0.1, 0.4 + aqi * 0.006 + rng.normal(0, 0.1))   # CO 同樣已普遍偏低
 
-        wind_dir = float(rng.uniform(0, 360))
-        wind_speed = float(max(0.2, 3 + rng.normal(0, 1.4)))
-        humidity = float(max(30, min(95, 70 + rng.normal(0, 8))))
+        # ── 氣象 ──
+        wind_dir = float(rng.uniform(0, 360))                      # 風向 0-360°
+        wind_speed = float(max(0.2, 3 + rng.normal(0, 1.4)))       # 風速 m/s
+        humidity = float(max(30, min(95, 70 + rng.normal(0, 8))))  # 濕度 30-95%
+        # 溫度模型:22°C 為均值,加上一天內的正弦波(早 6 點最冷 / 下午 2 點最熱),再加噪聲
         temperature = float(22 + 6 * math.sin((hour - 6) * math.pi / 12) + rng.normal(0, 1.2))
-        pressure = float(1010 + rng.normal(0, 3))
+        pressure = float(1010 + rng.normal(0, 3))                   # 氣壓 hPa(海平面均壓 1013)
 
-        # Risk score: weighted blend, normalized roughly 0-100
+        # ── 風險分數(綜合 0-100) ──
+        # 加權公式:PM2.5 權重最高(健康影響最大),CO 最低(已普遍很低)
+        # 每個污染物先除以其「參考門檻」(PM2.5 用 35 對齊 EPA 24h 標準),再加權平均
         risk = 0.40 * (pm25 / 35) + 0.20 * (aqi / 150) + 0.15 * (o3 / 100) \
              + 0.10 * (no2 / 80)  + 0.08 * (so2 / 30) + 0.07 * (co / 5)
+        # 乘 100 變成 0-100 分制,再 clip 邊界
         risk = float(min(100, max(0, risk * 100)))
 
         rows.append({
@@ -155,10 +253,21 @@ def generate_current_snapshot(now: datetime | None = None) -> pd.DataFrame:
 
 
 def generate_time_series(hours_back: int = 24, now: datetime | None = None) -> pd.DataFrame:
-    """A long-format dataframe of hourly AQI / PM2.5 per city for the last N hours."""
+    """合成過去 N 小時 × 20 城市的逐小時時序資料(long-format)。
+
+    內部會對每個小時呼叫一次 `generate_current_snapshot(ts)` 並把結果展平成
+    長表(每列一個城市 × 一個時點)。這是 EPA / CAMS 都掛掉時的最後 fallback。
+
+    Returns
+    -------
+    pd.DataFrame
+        欄位:timestamp, city_id, city, region, aqi, PM2.5, PM10, O3, NO2, SO2, CO, risk
+    """
     now = now or datetime.now()
     rows: list[dict[str, Any]] = []
+    # range(hours_back, -1, -1) = 從最舊到最新依序產生(包含 0,即現在)
     for h in range(hours_back, -1, -1):
+        # 對齊到整點(分秒歸零),確保時序的 x 軸刻度是漂亮的小時點
         ts = (now - timedelta(hours=h)).replace(minute=0, second=0, microsecond=0)
         df = generate_current_snapshot(ts)
         for _, r in df.iterrows():
@@ -184,10 +293,11 @@ def _open_meteo_city_slice(
     past_days: int = 1,
     forecast_days: int = 1,
 ) -> pd.DataFrame | None:
-    """Single-city Open-Meteo Air Quality slice — used by the forecast +
-    history-with-forecast helpers below. Returns a DataFrame with
-    `timestamp, aqi, is_forecast` (the columns the existing chart code
-    expects)."""
+    """單一城市的 Open-Meteo Air Quality 切片(目前已無呼叫者,留作工具函式)。
+
+    回傳欄位包含 timestamp / aqi / is_forecast — 配合圖表程式碼預期格式。
+    若該城市找不到或 API 無回應則回 None。
+    """
     city = CITY_BY_ID.get(city_id)
     if city is None:
         return None
@@ -198,116 +308,70 @@ def _open_meteo_city_slice(
     return df
 
 
-def generate_forecast(city_id: str, hours_ahead: int = 6, now: datetime | None = None) -> pd.DataFrame:
-    """N-hour AQI forecast from Open-Meteo Copernicus CAMS.
-    Returns columns: timestamp, aqi, lower, upper, is_forecast.
-    Confidence band widens linearly with the forecast horizon
-    (a stand-in for true model uncertainty — CAMS doesn't ship per-hour σ
-    via the free endpoint)."""
-    base = _open_meteo_city_slice(city_id, past_days=0, forecast_days=2)
-    if base is None or base.empty:
-        return pd.DataFrame(columns=["timestamp", "aqi", "lower", "upper", "is_forecast"])
-    now_ts = pd.Timestamp(now or datetime.now())
-    fc = base[base["timestamp"] > now_ts].head(hours_ahead).copy()
-    fc = fc[["timestamp", "aqi"]].reset_index(drop=True)
-    fc["is_forecast"] = True
-    # Confidence band: widen by 2 AQI/hr from a 6-point floor
-    spread = 6 + (fc.index.to_series() + 1) * 2.5
-    fc["lower"] = (fc["aqi"] - spread).clip(lower=5).round(1)
-    fc["upper"] = (fc["aqi"] + spread).round(1)
-    return fc
-
-
-def generate_history_with_forecast(city_id: str, history_hours: int = 12, ahead: int = 6) -> pd.DataFrame:
-    """Past N hours + next M hours for a city, both from Open-Meteo CAMS.
-    Used by the city-deep-dive forecast chart."""
-    base = _open_meteo_city_slice(city_id, past_days=2, forecast_days=2)
-    if base is None or base.empty:
-        return pd.DataFrame(columns=["timestamp", "aqi", "lower", "upper", "is_forecast"])
-    now_ts = pd.Timestamp(datetime.now())
-    hist = base[base["timestamp"] <= now_ts].tail(history_hours + 1).copy()
-    hist = hist[["timestamp", "aqi"]].copy()
-    hist["lower"] = hist["aqi"]
-    hist["upper"] = hist["aqi"]
-    hist["is_forecast"] = False
-
-    fc = base[base["timestamp"] > now_ts].head(ahead).copy()
-    fc = fc[["timestamp", "aqi"]].reset_index(drop=True)
-    fc["is_forecast"] = True
-    spread = 6 + (fc.index.to_series() + 1) * 2.5
-    fc["lower"] = (fc["aqi"] - spread).clip(lower=5).round(1)
-    fc["upper"] = (fc["aqi"] + spread).round(1)
-
-    return pd.concat([hist, fc], ignore_index=True)
-
-
-# ---------------------------------------------------------------------------
-# Auxiliary panels
-# ---------------------------------------------------------------------------
+# ─── 輔助面板資料 (Auxiliary Panels) ──────────────────────────────────────
 
 
 def generate_citizen_vs_official(
     snapshot_df: pd.DataFrame,
     lass_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Compare official EPA PM2.5 (from the snapshot) against the
-    LASS-net civilian-sensor median per city (from `fetch_lass_airbox()`).
+    """整合「官方 EPA」與「民間 LASS-net」的 PM2.5 對比表。
 
-    `lass_df` is the per-city DataFrame returned by `fetch_lass_airbox()`.
-    If None or empty, the comparison falls back to `citizen_PM2.5 = NaN`
-    everywhere — the UI will then show "無民間感測站覆蓋" for each city.
+    輸出每個城市的:
+      - official_PM2.5:來自 snapshot(EPA aqx_p_432 即時值)
+      - citizen_PM2.5: 來自 LASS Airbox 的城市中位數(若有覆蓋)
+      - delta:民間 - 官方(正值代表民間更高 — 通常在街角 / 住家陽台量測)
+      - sensor_count:該城市的民間感測器數量
+
+    若 LASS 抓取失敗(`lass_df` 為 None / empty),所有城市的 citizen_PM2.5
+    填 NaN,UI 端會顯示「無民間感測站覆蓋」。
     """
+    # 從 snapshot 取需要的欄位,並把 PM2.5 改名 official_PM2.5 以便和民間版區分
     df = snapshot_df[["city", "city_id", "PM2.5"]].copy()
     df = df.rename(columns={"PM2.5": "official_PM2.5"})
 
     if lass_df is not None and not lass_df.empty:
+        # left join — 保留所有官方城市,民間沒覆蓋的城市為 NaN
         df = df.merge(
             lass_df[["city_id", "citizen_PM2.5", "sensor_count"]],
             on="city_id",
             how="left",
         )
     else:
+        # LASS 抓取整體失敗時的 fallback,讓 UI 不會 KeyError
         df["citizen_PM2.5"] = float("nan")
         df["sensor_count"]  = 0
 
+    # 計算差異(round 到 1 位小數方便顯示)
     df["delta"] = (df["citizen_PM2.5"] - df["official_PM2.5"]).round(1)
     return df[["city", "city_id", "official_PM2.5", "citizen_PM2.5", "delta", "sensor_count"]]
 
 
 @dataclass
 class CleaningReport:
-    raw_records:    int
-    kept_records:   int
-    dropped_records: int
-    drop_reasons:   dict[str, int]
+    """清洗報告的不可變資料結構 — 整批 ETL 處理的統計結果。
+
+    用途:UI 上「採集者」顯示「原始 X 筆 → 保留 Y 筆」的清洗摘要。
+    被 `fetch_citizen_sensors()` 與 `fetch_lass_airbox()` 等真實 ETL 函式使用。
+    """
+    raw_records:    int                  # 從 API 拉到的原始筆數
+    kept_records:   int                  # 經清洗後保留的筆數
+    dropped_records: int                 # 被丟棄的筆數
+    drop_reasons:   dict[str, int]       # 各種丟棄原因的計數,例:{"格式錯誤": 25, "重複資料": 12}
 
     @property
     def keep_rate(self) -> float:
+        """保留率 = kept / max(1, raw),max 防止除以零。"""
         return self.kept_records / max(1, self.raw_records)
 
 
-def generate_cleaning_report() -> CleaningReport:
-    raw = random.randint(820, 980)
-    dropped_invalid = random.randint(15, 40)
-    dropped_dup     = random.randint(8, 22)
-    dropped_outlier = random.randint(4, 14)
-    dropped = dropped_invalid + dropped_dup + dropped_outlier
-    return CleaningReport(
-        raw_records=raw,
-        kept_records=raw - dropped,
-        dropped_records=dropped,
-        drop_reasons={
-            "格式錯誤":  dropped_invalid,
-            "重複資料":  dropped_dup,
-            "離群值":    dropped_outlier,
-        },
-    )
+# ─── 健康建議 (Health Advisory) — UI 配置 ────────────────────────────────
+# 以下三個常數是純 UI 配置,不是「資料」也不是「合成生成器」。
+# 用於 sidebar 訂閱表單、個人化推薦頁面。
+# ─────────────────────────────────────────────────────────────────────────
 
-
-# ---------------------------------------------------------------------------
-# Health advisory
-# ---------------------------------------------------------------------------
-
+# 5 類敏感族群 — 與台灣 EPA / WHO 標準一致
+# 每個 dict 提供 emoji icon + 中文標籤,供 multiselect 元件顯示
 SENSITIVE_GROUPS = [
     {"id": "elderly",       "label": "老人",     "icon": "👴"},
     {"id": "children",      "label": "幼童",     "icon": "🧒"},
@@ -316,6 +380,8 @@ SENSITIVE_GROUPS = [
     {"id": "pregnant",      "label": "孕婦",     "icon": "🤰"},
 ]
 
+# 每類敏感族群的通用健康建議 — LLM 失敗時的 fallback
+# 內容引用 WHO / EPA / Lancet 等文獻的共識
 GROUP_ADVICE = {
     "elderly":        "避免清晨與傍晚交通尖峰時段外出，外出佩戴 N95 口罩，注意血壓變化。",
     "children":       "暫停戶外體育課與遊戲，改為室內活動，留意是否出現咳嗽或喘鳴。",
@@ -324,6 +390,7 @@ GROUP_ADVICE = {
     "pregnant":       "盡量待在室內並開啟空氣清淨機，研究顯示 PM2.5 暴露與低出生體重相關。",
 }
 
+# 戶外活動類型 — 個人化推薦時供使用者選擇「我關心哪種活動」
 OUTDOOR_ACTIVITIES = [
     {"id": "running",  "label": "慢跑",     "icon": "🏃"},
     {"id": "cycling",  "label": "自行車",   "icon": "🚴"},
@@ -335,11 +402,24 @@ OUTDOOR_ACTIVITIES = [
 
 
 def best_outdoor_hours(city_id: str) -> pd.DataFrame:
-    """Return next 12 hours with a recommendation flag."""
+    """合成「未來 12 小時的最佳外出時段」推薦表。
+
+    ⚠ 此函式使用 `_seed_for + np.random` 產生合成預測,並非真實的 6h 預測。
+    保留只是因為 app.py 的個人化推薦 section 仍在引用。要替換成真實資料,
+    可改用 Open-Meteo CAMS 預測(`_open_meteo_city_slice(forecast_days=1)`)。
+
+    Returns
+    -------
+    pd.DataFrame
+        12 列(每小時一列),欄位:hour, aqi, level, color, score, recommend
+        recommend=True 標記在 score 最高的時點(其餘為 False)
+    """
     now = datetime.now()
     rows = []
+    # 對未來 12 小時的每一個整點各算一筆推薦分數
     for h in range(12):
         ts = now + timedelta(hours=h)
+        # 為「該城市 + 該未來小時」產生穩定種子,確保使用者多次 rerun 看到同一結果
         rng = np.random.default_rng(_seed_for(city_id + "_out", ts))
         diurnal = _diurnal_factor(ts.hour)
         city = CITY_BY_ID[city_id]
@@ -350,24 +430,25 @@ def best_outdoor_hours(city_id: str) -> pd.DataFrame:
             "aqi":   round(aqi, 1),
             "level": aqi_to_level(aqi)["name"],
             "color": aqi_to_level(aqi)["color"],
+            # 戶外指數 = 100 - AQI * 0.55,讓 AQI = 50 → score 72.5、AQI = 100 → score 45
             "score": round(max(0, 100 - aqi * 0.55), 1),
         })
     df = pd.DataFrame(rows)
+    # recommend = 該列的 score 是不是 12 小時內的最大值(只有最佳時點為 True)
     df["recommend"] = df["score"] == df["score"].max()
     return df
 
 
-# ---------------------------------------------------------------------------
-# Agent pipeline scripts
-# ---------------------------------------------------------------------------
+# ─── 3-agent Pipeline 設定 (Agent Pipeline Configuration) ──────────────────
 
-# Visual display order in the lobster theater (left-to-right).
-# Pipeline execution order: A (採集 — 含資料來源 + 清洗) → B (分析) → C (預警).
-# Previously this list had 4 agents (A/B/C + 民間感測員 D) plus a separate
-# CRITIC; the 民間感測員 was merged into 採集者 because both were doing pure
-# HTTP fetching with vestigial LLM "comment" calls, and the Critic was
-# removed because its score didn't actually gate anything (low scores
-# never triggered a retry of the analyst).
+
+# Pipeline 中 3 個 agent 的排列順序(同時也是儀表板的視覺顯示順序,左到右)
+# 執行流程:A 採集者 → B 分析師 → C 預警員
+#
+# 歷史:早期有 5 個 agent(採集者 / 爬蟲員 / 分析師 / 品管員 Critic / 預警員)。
+# 「爬蟲員」與「採集者」工作重疊(都是 HTTP fetch),合併成單一採集者;
+# 「品管員 Critic」原本給分析報告打 0-100 分,但低分並未真的觸發 retry,
+# 等於不影響流程,因此移除。3-agent 重構讓邏輯更清晰、debug 更容易。
 AGENTS = [
     {"id": "A", "name": "採集者", "role": "資料採集",   "color": "#00d9ff",
      "desc": "EPA + Open-Meteo + 民生公共物聯網 / LASS（並行清洗，無 LLM）"},
@@ -381,10 +462,14 @@ AGENTS = [
 
 
 # =============================================================================
-# Real-time API helpers
+# 即時資料 API Helper 區段 (Real-time API Helpers)
+# =============================================================================
+# 以下函式呼叫實際的外部 API,是「真實資料」的主要來源。
+# 失敗時呼叫者(`generate_real_snapshot`)會 fallback 到上方的合成生成器。
 # =============================================================================
 
-# Maps Taiwan EPA county names → city IDs used in CITIES list
+# 環境部 EPA 回傳的「縣市中文名稱」對應到我們專案內的 city_id slug。
+# 兩個 key 是為了處理「臺北市」與「台北市」這類「臺/台」異體字共存的情況。
 COUNTY_TO_CITY_ID: dict[str, str] = {
     "臺北市": "taipei",    "台北市": "taipei",
     "新北市": "new_taipei",
@@ -419,38 +504,55 @@ _REGION_REPR: dict[str, str] = {
 
 
 def _safe_float(v: Any, default: float = 0.0) -> float:
+    """安全地把任何值轉成 float;失敗或 NaN 都回 default。
+
+    用於處理 API 回應中可能是 string / None / "ND"(EPA 用「ND」代表「測不到」)
+    的數值欄位,避免 float("ND") 直接炸掉整支程式。
+    """
     try:
         f = float(v)
+        # NaN 不等於自己,math.isnan 是最可靠的偵測方式
         return f if not math.isnan(f) else default
     except (TypeError, ValueError):
         return default
 
 
 def fetch_epa_realtime(api_key: str | None = None) -> pd.DataFrame | None:
-    """Fetch real-time AQI from Taiwan 環境部 Open Data v2 (moenv.gov.tw, formerly epa.gov.tw).
-    The v2 endpoint requires a registered api_key; returns None on auth or network failure.
+    """從環境部 Open Data v2(moenv.gov.tw,前身為 epa.gov.tw)抓取即時 AQI。
 
-    Tolerant to multiple response shapes observed in the wild:
-      - {"records": [...], "total": N}        (older)
-      - [{...}, {...}]                        (newer array)
-      - {"data": [...]}                       (some endpoints)
-      - {"result": {"records": [...]}}        (wrapped)
+    端點:`https://data.moenv.gov.tw/api/v2/aqx_p_432`(每小時更新一次)
+    認證:需在 moenv.gov.tw 註冊帳號取得免費 api_key
+
+    為什麼程式碼這麼防禦性?MOENV API 的回傳格式在實務中觀察到至少 4 種變形,
+    可能是後端不同代版本並存。本函式對 4 種格式都能 parse:
+      - {"records": [...], "total": N}        ← 較舊的格式
+      - [{...}, {...}]                        ← 較新的純陣列
+      - {"data": [...]}                       ← 某些 endpoint
+      - {"result": {"records": [...]}}        ← 被包裝的格式
+
+    Returns
+    -------
+    pd.DataFrame | None
+        失敗時回 None — 呼叫者必須處理 None 的情況(切換到 mock fallback)
     """
+    # limit=1000 一次取所有 77 個測站(實務上不到 80 筆,但留 buffer);format=JSON 而非 CSV
     params: dict[str, Any] = {"limit": 1000, "format": "JSON", "offset": 0}
     if api_key and api_key.strip():
         params["api_key"] = api_key.strip()
     try:
         r = requests.get(
             "https://data.moenv.gov.tw/api/v2/aqx_p_432",
-            params=params, timeout=15,
+            params=params, timeout=15,    # 15 秒夠長,Taiwan 主機通常 < 3s
         )
         r.raise_for_status()
-        # MOENV returns HTTP 200 + plain-text error body when auth fails.
+        # 認證失敗時 MOENV 會回 HTTP 200 + 純文字錯誤訊息(而非 4xx),
+        # 因此額外檢查 Content-Type 確認真的是 JSON
         ct = r.headers.get("Content-Type", "")
         if "json" not in ct.lower():
             return None
         body = r.json()
         records: list | None = None
+        # 依序嘗試 4 種已知的格式;or 短路求值找到第一個非空的就停
         if isinstance(body, list):
             records = body
         elif isinstance(body, dict):
@@ -462,11 +564,20 @@ def fetch_epa_realtime(api_key: str | None = None) -> pd.DataFrame | None:
             return None
         return pd.DataFrame(records)
     except Exception:
+        # 任何例外都回 None(網路斷線、JSON parse 失敗、Timeout 等)
+        # 呼叫者會 fallback 到 mock
         return None
 
 
 def fetch_weather_current(lat: float, lon: float) -> dict[str, float]:
-    """Fetch current weather from Open-Meteo (free, no key). Falls back silently."""
+    """從 Open-Meteo 抓取單點即時氣象(免金鑰、免註冊)。
+
+    Open-Meteo 是歐洲氣象資料整合服務,提供免費的天氣 API,
+    台灣氣象資料來源主要是 ECMWF + 各國氣象局的混合模型。
+
+    失敗時不會炸,而是回一組「合理的台灣春夏典型值」(25°C / 70% / 3 m/s),
+    確保 UI 即使在無網路情況下也能顯示完整的氣象卡片。
+    """
     try:
         r = requests.get(
             "https://api.open-meteo.com/v1/forecast",
@@ -502,16 +613,32 @@ def _resolve_col(df: pd.DataFrame, *candidates: str) -> str | None:
 
 
 def generate_real_snapshot(epa_key: str | None = None) -> tuple[pd.DataFrame | None, str]:
-    """
-    Build a per-city snapshot from Taiwan MOENV real-time API + Open-Meteo weather.
-    Tolerant to column-name changes between old EPA and new MOENV v2 schema.
-    Returns (DataFrame, status_message). DataFrame is None on failure.
+    """整合 EPA + Open-Meteo 產出「真實」的 20 城市當下快照。
+
+    這是 `generate_current_snapshot()` 的真實資料版本。當 EPA API 成功
+    回應時,app.py 會優先用這個函式;失敗才 fallback 到合成版本。
+
+    處理流程:
+      1. 呼叫 `fetch_epa_realtime()` 取得 EPA 77 個測站的當下值
+      2. 用 `_resolve_col` 容錯處理欄位命名(舊 EPA / 新 MOENV v2 兩種命名共存)
+      3. 為「每個區域的代表城市」呼叫一次 Open-Meteo 氣象 API(共 5 次,
+         不是 20 次,因為氣象變化區域內差異小,可共用)
+      4. 對每個 city,從 EPA 資料 group_by 縣市並取「測站平均」作該城市的代表值
+      5. 計算 `updated_min_ago`(EPA publishtime 距現在的分鐘數),取代合成版的隨機值
+
+    Returns
+    -------
+    tuple[pd.DataFrame | None, str]
+        (df, status_msg)
+        df = None 時表示失敗,status_msg 解釋失敗原因
+        df 成功時,status_msg 是「成功取得 X 城市即時資料」摘要
     """
     raw = fetch_epa_realtime(epa_key)
     if raw is None or raw.empty:
         return None, "EPA API 無回應或無資料，請確認網路或 API 金鑰"
 
-    # Resolve actual column names once (handles both old & new MOENV schemas)
+    # 預先解析所有欄位名稱(舊 EPA 用「PM2.5」、新 MOENV 用「pm25」,要兩個都接得起來)
+    # 用 _resolve_col 一次找出實際存在的欄位名,後面就不用每次 try 多種寫法
     cols = {
         "county":      _resolve_col(raw, "County", "county", "縣市"),
         "aqi":         _resolve_col(raw, "AQI", "aqi"),
@@ -617,29 +744,36 @@ def generate_real_timeseries(
     hours_back: int = 24,
     epa_key: str | None = None,
 ) -> pd.DataFrame:
-    """Build a 24-hour history DataFrame.
+    """產出 24 小時的歷史 DataFrame,使用三層 fallback 策略確保總有資料可顯示。
 
-    Strategy (in order of preference, each falls back to the next):
-      1. EPA aqx_p_488 — official Taiwan EPA hourly history.
-      2. Open-Meteo CAMS — Copernicus atmospheric model hourly history.
-      3. Diurnal-pattern reconstruction (clearly labelled as derived).
+    優先順序(依次降級):
+      1. **EPA aqx_p_488** — 環境部官方測站每小時實測歷史(真實資料,最權威)
+      2. **Open-Meteo CAMS** — 歐洲哥白尼大氣化學模式網格(真實模型,涵蓋全境)
+      3. **日夜模式重建** — 用 snapshot 當下 AQI 為錨點,用 `_diurnal_factor`
+         反推 24 小時前的變化曲線(合成,僅當前兩者都失敗時的最後手段)
 
-    The synthesised fallback (3) is only used as a last resort when both
-    external sources fail. It is anchored to the current AQI reading so
-    at least the right-hand "now" edge matches reality.
+    為什麼 fallback 也要錨定到當下 AQI?讓圖表的「右邊(現在)」一定對得起來,
+    使用者看到的「現在 AQI」與時序圖最右端一致;只有歷史那段是猜的。
+
+    Returns
+    -------
+    pd.DataFrame
+        欄位:timestamp, city_id, city, region, aqi, PM2.5, PM10, O3, NO2, SO2, CO, risk
+        無論走哪一條路徑,都會回傳同樣 schema 的 DataFrame
     """
-    # 1. EPA history (real Taiwan readings)
+    # 1. EPA 歷史測站(最權威)
     if epa_key:
         epa_hist = fetch_epa_historical(epa_key, hours_back=hours_back)
         if epa_hist is not None and not epa_hist.empty:
             return epa_hist
 
-    # 2. Open-Meteo CAMS (real model)
+    # 2. CAMS 大氣化學模式(免金鑰,涵蓋全境)
+    # 注意:CAMS 一次回 past_days + forecast_days 的資料,因此要 filter 出 <= now 的歷史段
     cams = fetch_open_meteo_aq_batch(CITIES, past_days=1, forecast_days=0)
     if cams is not None and not cams.empty:
         return cams[cams["timestamp"] <= pd.Timestamp(datetime.now())].copy()
 
-    # 3. Fallback: diurnal-pattern reconstruction
+    # 3. Fallback:用日夜模式重建歷史曲線(以當下 AQI 為錨點)
     now = datetime.now()
     rows: list[dict[str, Any]] = []
     for _, city_row in snapshot.iterrows():
@@ -671,21 +805,32 @@ def generate_real_timeseries(
 
 
 # =============================================================================
-# Real-data fetchers — replace the synthetic generators above
+# 真實資料抓取器 (Real-data Fetchers) — 完全取代上面合成生成器的「正式」資料路徑
+# =============================================================================
+# 本區段是整個系統的「資料心臟」 — 所有真實外部 API 都集中在這。
+# 失敗時呼叫者(主要是 app.py)會自動 fallback 到上方的合成版本。
+#
+# 資料來源層級:
+#   1. EPA (環境部 Open Data)        ← 官方測站,77 站,每小時更新,需 API key
+#   2. Open-Meteo CAMS               ← 衛星同化模型,網格產出,免金鑰
+#   3. 民生公共物聯網 (Civil IoT)    ← 政府 micro sensor 網路,~10,000 個感測器
+#   4. LASS-net Airbox               ← 社群 / 學術感測器,~500 個,離島覆蓋好
 # =============================================================================
 
+# LASS-net 社群 Airbox 入口 — 公開 JSON,免金鑰
 LASS_AIRBOX_URL    = "https://pm25.lass-net.org/data/last-all-airbox.json"
+# EPA 24h 歷史值 endpoint(aqx_p_488 = "全國空氣品質監測小時值"資料集)
 EPA_HIST_URL       = "https://data.moenv.gov.tw/api/v2/aqx_p_488"
+# Open-Meteo 空氣品質 API(CAMS 來源),免金鑰
 OPEN_METEO_AQ_URL  = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
-# 民生公共物聯網 (Civil IoT Taiwan) — Smart City PM2.5 dense sensor network.
-# Official OGC SensorThings API at the Academia Sinica colife.org.tw mirror.
-# This is the proper "民生公共物聯網" data service endpoint — covers ~10,000+
-# civilian micro-sensors maintained under the 智慧城鄉空品微型感測器 program.
+# 民生公共物聯網 (Civil IoT Taiwan) — 智慧城鄉空品微型感測器計畫的官方資料服務。
+# 用 OGC SensorThings API 標準,中央研究院 colife.org.tw 鏡像入口。
+# 涵蓋約 10,000+ 個由政府佈建的 PM2.5 微型感測器,覆蓋工業 / 都市 / 農業區密集。
 CIVIL_IOT_STA_URL  = "https://sta.colife.org.tw/STA_AirQuality_EPAIoT/v1.0/Datastreams"
 
-# Per-city radius (km) for matching civilian sensors. Outlying islands have
-# fewer LASS sensors, so we widen the match radius for them.
+# 民間感測器匹配的「半徑」(km)。離島(澎湖/金門/馬祖)與東部(花蓮/台東)
+# 民間感測器較稀疏,需要拉大半徑才能找到至少 1 個感測器代表該城市。
 _OFFSHORE_REGIONS = {"離島", "東部"}
 
 
@@ -1116,8 +1261,23 @@ def send_discord_webhook(
     critic_score: float | None,
     data_mode: str = "real",
 ) -> tuple[bool, str]:
-    """POST a Pipeline-summary embed to a Discord channel webhook.
-    Returns (success, message). No-op (returns False, reason) if url is blank."""
+    """Pipeline 跑完後,把摘要 POST 到 Discord channel webhook。
+
+    Discord embed 是一種美觀的卡片訊息格式,比純文字 message 更專業。
+    包含的欄位:
+      - 全國平均 AQI(突出顯示)
+      - 最高 / 最低 AQI 的城市
+      - Critic 評分(舊版功能,3-agent refactor 後通常為 None,顯示 「—」)
+      - 資料來源標籤(LIVE / MOCK)
+
+    Webhook URL 是使用者自己在 Discord 頻道設定中產生的,例:
+      `https://discord.com/api/webhooks/{channel_id}/{token}`
+
+    Returns
+    -------
+    tuple[bool, str]
+        (success, status_msg) — UI 顯示 status_msg 讓使用者知道有沒有成功
+    """
     url = (url or "").strip()
     if not url:
         return False, "未填 Discord webhook URL"
@@ -1160,12 +1320,25 @@ def send_discord_webhook(
 
 
 # =============================================================================
-# Direct multi-provider LLM helpers
-# (OpenClaw is kept for cron push / Discord-LINE binding / MEMORY.md, but
-#  in-app LLM calls go straight to provider HTTP APIs — much faster than
-#  routing through OpenClaw gateway which adds 30-60s plugin overhead.)
+# 直接呼叫多家 LLM 的 helper (Multi-provider LLM Helpers)
+# =============================================================================
+# 設計取捨:OpenClaw gateway 統一管理 LLM 雖然優雅,但每次呼叫多 30-60 秒
+# 的插件冷啟,對「使用者按鈕後幾秒內要看到結果」的 UI 太慢。因此本專案
+# 採「混合架構」:
+#   - **Pipeline 內的 LLM 呼叫**(分析師 / 預警員 / 右下角助理 / 城市比較)
+#     → 直接呼叫各家 provider 的 HTTP API,毫秒級延遲
+#   - **OpenClaw 仍保留用於**:cron 排程推送、Discord/LINE 綁定、
+#     MEMORY.md 跨會話記憶 — 這些不需即時回應
 # =============================================================================
 
+# 所有支援的 LLM 提供商配置 — 加新家只要在這加一筆即可。
+# 每筆配置包含:
+#   name           顯示在 UI selectbox 的中文名
+#   placeholder    輸入框的 placeholder(讓使用者知道 key 的格式)
+#   default_model  該家的預設模型(留空表示使用者必填)
+#   base_url       自訂 endpoint(留空使用 anthropic / openai 等的官方預設)
+# 全部都用 OpenAI-format API contract — 因為 Gemini / MiniMax / OpenAI 都支援。
+# Anthropic 的格式略有不同,在 call_llm_api 內會分支處理。
 LLM_PROVIDERS: dict[str, dict[str, str]] = {
     "anthropic": {
         "name":          "Anthropic (Claude)",
@@ -1207,22 +1380,24 @@ LLM_PROVIDERS: dict[str, dict[str, str]] = {
 }
 
 
-# Diagnostic: every call_llm_api updates this so callers can inspect WHY the
-# last call failed (timeout / HTTP status / JSON parse / etc).
+# 診斷用全域變數:每次 call_llm_api 失敗都更新這個,
+# 呼叫者(app.py)可以讀取此值告訴使用者「為什麼失敗」(timeout / HTTP 4xx / parse 失敗 等)
 LAST_LLM_ERROR: str = ""
 
 
-# Various models leak their internal reasoning as <thinking>...</thinking> or
-# <think>...</think> blocks (Claude extended thinking, DeepSeek-R1, Qwen-QwQ,
-# some MiniMax). Strip them before showing to the user.
+# 有些 LLM 會把內部推理思考過程暴露在 <thinking>...</thinking> 或
+# <think>...</think> 標籤中(Claude extended thinking、DeepSeek-R1、Qwen-QwQ、
+# 部份 MiniMax 模型)。這對使用者沒幫助,還會顯得雜亂,因此在顯示前濾掉。
 import re as _re
 
+# 完整配對:<thinking>...</thinking>(也接受 think / reasoning / analysis / reflection)
 _REASONING_TAG_RE = _re.compile(
     r"<\s*(thinking|think|reasoning|analysis|reflection)\s*>"
-    r"[\s\S]*?"
+    r"[\s\S]*?"     # 非貪婪匹配,確保不會誤吃多個 block
     r"<\s*/\s*\1\s*>",
     _re.IGNORECASE,
 )
+# 模型被截斷時可能只開了 <thinking> 沒關閉;這種情況把從開標籤到結尾全砍掉
 _DANGLING_OPEN_RE = _re.compile(
     r"<\s*(thinking|think|reasoning|analysis|reflection)\s*>[\s\S]*$",
     _re.IGNORECASE,
@@ -1230,8 +1405,22 @@ _DANGLING_OPEN_RE = _re.compile(
 
 
 def clean_llm_output(text: str | None) -> str:
-    """Strip reasoning-tag blocks, leading/trailing whitespace, and code fences
-    that some models wrap around plain prose."""
+    """清理 LLM 原始輸出,移除思考標籤、空白、不必要的 markdown 圍欄。
+
+    處理步驟:
+      1. 移除所有 `<thinking>...</thinking>` 等推理標籤區塊
+      2. 處理「半開」的標籤(模型輸出被 token limit 截斷時)
+      3. trim 前後空白
+      4. 如果整段被 ```...``` 包圍,把圍欄拿掉(只保留內容)
+
+    為什麼 LLM 會吐出推理區塊?某些 reasoning model 預設會回傳:
+        <thinking>
+        Let me analyze the AQI...
+        </thinking>
+        台北市的 AQI 為...
+    我們不希望使用者看到「Let me analyze」之類的英文 internal monologue,
+    因此在顯示前一律清掉。
+    """
     if not text:
         return ""
     out = _REASONING_TAG_RE.sub("", text)
@@ -1254,18 +1443,46 @@ def call_llm_api(
     model: str,
     base_url: str = "",
     system: str = "你是台灣空氣品質監測專家，根據 AQI 數據提供準確、有依據的健康建議。回覆請使用繁體中文。",
-    # Default cap is generous (~4k output tokens). Callers can pass a higher
-    # number for long-form responses; we deliberately don't enforce shorter
-    # replies by default — users repeatedly asked for unbounded LLM output.
+    # 預設 4096 token 上限(夠長,給長報告用)。呼叫者可傳更高;
+    # 不刻意強制短回應,因為使用者多次反映希望 LLM 講清楚不要被截斷。
     max_tokens: int = 4096,
     timeout: int = 30,
 ) -> str | None:
-    """
-    Call the selected LLM provider directly via HTTP. Returns response text
-    or None on failure. On failure, the module-level `LAST_LLM_ERROR` is set
-    to a short diagnostic string (HTTP status / timeout / exception type).
-    Anthropic uses Messages API; everything else uses an
-    OpenAI-compatible /chat/completions endpoint.
+    """直接呼叫指定 LLM 提供商的 HTTP API,回傳純文字(已清理 reasoning 標籤)。
+
+    支援的 provider:
+      - **anthropic**:走 Anthropic Messages API (不同於 OpenAI 格式)
+      - **gemini / openai / minimax / custom**:走 OpenAI-format /chat/completions
+
+    失敗處理:
+      - 任何例外都回 None
+      - `LAST_LLM_ERROR` 全域變數會被設成短診斷訊息(HTTP status / timeout 等)
+      - 對 429/500/502/503/504 等 transient 錯誤會自動重試一次
+        (Gemini 在尖峰時段常出現 503 UNAVAILABLE)
+
+    Parameters
+    ----------
+    provider : str
+        要使用哪一家('anthropic' / 'gemini' / 'minimax' / 'openai' / 'custom')
+    api_key : str
+        該家的金鑰;空白會直接回 None
+    prompt : str
+        使用者問題或 Pipeline 中組好的 context+question
+    model : str
+        模型名;若空字串會用該 provider 的 default_model
+    base_url : str
+        custom provider 時用,其他家會 fallback 到 LLM_PROVIDERS 內定義的 endpoint
+    system : str
+        system prompt,預設限制 LLM 用繁體中文 + 強調有依據的建議
+    max_tokens : int
+        最大輸出 token 數
+    timeout : int
+        單次 HTTP 請求 timeout(秒)
+
+    Returns
+    -------
+    str | None
+        清理後的純文字回應;失敗時為 None(呼叫者必須處理)
     """
     global LAST_LLM_ERROR
     LAST_LLM_ERROR = ""

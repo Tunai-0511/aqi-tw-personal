@@ -12,6 +12,85 @@
 
 ---
 
+## [2026-05-14] 大規模加上繁體中文詳細註解
+
+### Documented
+為整個專案的 Python 程式碼加上完整的繁體中文註解 — 讓未來接手者(或自己)
+快速理解每個模組 / 函式 / 區塊的用途。
+
+**模組層級**:每個檔案頂部新增完整的 docstring,說明該檔的職責與整體結構。
+
+**函式層級**:所有 public 函式都有詳細 docstring,包含:
+- 功能說明(做什麼、為什麼)
+- Parameters 含意
+- Returns 含意
+- 重要的非顯式行為(例:失敗時回 None、idempotent 等)
+
+**區段層級**:每個 `# ===` SECTION 分隔線下方加上中文說明,標出該區塊內容。
+
+**內聯註解**:複雜邏輯加上 `# 註解` 解釋「為什麼這樣寫」(而非「做什麼」)。
+
+### Per-file Summary
+- **[_city_detail.py](_city_detail.py)** (196 行) — 完整重寫成中文註解版,涵蓋 hero 區、Row 1 圖表、Row 3 預警員建議的渲染邏輯
+- **[tsdb.py](tsdb.py)** (354 行) — 完整重寫,深入解釋為什麼用 SQLite、兩種 source 的設計、schema 遷移流程
+- **[charts.py](charts.py)** (501 行) — 完整重寫,每個 Plotly 圖表工廠函式都有詳細說明:用途、視覺設計、特殊參數
+- **[data.py](data.py)** (1312 行) — 模組 docstring + 主要函式 docstring + 區段標頭中文化。重點:
+  - 靜態參考資料(CITIES / AQI_LEVELS / POLLUTANTS)的設計理由
+  - 合成生成器(mock fallback)的數學模型(日夜雙峰、城市偏差、加權風險)
+  - 真實 API fetcher 區段(EPA / CAMS / CivilIoT / LASS)的端點選擇與容錯邏輯
+  - LLM 多 provider 切換的設計理由(直接 HTTP vs OpenClaw gateway)
+- **[app.py](app.py)** (2670 行) — 模組 docstring + session_state 逐欄解釋 + 所有 SECTION 中文標頭。重點:
+  - 整體頁面架構(封面 → 4 個 SECTION → 個人訂閱)
+  - `init_state()` 每個欄位的用途與預設值理由
+  - `_auto_refresh_tick` fragment 的工作機制
+  - **RAG 整段詳細說明**:RAG_SNIPPETS 內容、`_score_chunk` n-gram 演算法、retrieve top-k 策略
+  - `run_pipeline()` 三 agent 執行流程
+  - `_render_chat_panel()` AI 助理對話流程(RAG + LLM 整合)
+
+### Skipped
+- **[styles.py](styles.py)** (1302 行) — 主要是 CSS 字串而非 Python 邏輯,
+  CSS 內已有英文 `/* ... */` 註解標示各區塊用途,不再額外加中文
+
+### Verification
+```powershell
+cd C:\Users\tunai\Downloads\aqi-tw-personal-main
+.venv\Scripts\python.exe -m py_compile app.py charts.py styles.py _city_detail.py data.py tsdb.py
+```
+- 全部通過 syntax 檢查
+- 沒有改變任何執行邏輯,純註解 / docstring / 區段標頭
+- _city_detail.py、tsdb.py、charts.py 是「完整重寫」並順便清掉小型 dead code
+  (例:_city_detail.py 移除 unused import `best_outdoor_hours`、`make_outdoor_bars`)
+
+---
+
+## [2026-05-14] 死碼清理:刪除無人呼叫的函式、未使用 CSS、空檔案與廢棄 agent 目錄
+
+### Removed
+- **`data.py` 內 3 個無人呼叫的函式**:
+  - `generate_forecast()`(原 L201-218,~19 行)— 之前刪除預測 UI 後失去呼叫者
+  - `generate_history_with_forecast()`(原 L221-241,~23 行)— 同上
+  - `generate_cleaning_report()`(原 L289-304,~17 行)— 用 `random.randint` 偽造清洗統計,已被 `fetch_citizen_sensors()` 真實版取代
+- **`charts.py` 內 `make_forecast_chart()`**(原 L281-323,~43 行)— 與上面三個函式同期失去呼叫者
+- **`styles.py` 內 `.agent-report*` CSS 全系列**(原 L862-955,~94 行 / 15 個選擇器)— 第三輪 Fix-5 把 agent 卡片改用 `st.columns + st.expander + st.markdown` 後,此 CSS 已無 HTML 引用
+- **根目錄空檔 `OpenClaw Setup`**(0 bytes)— 殘留,無內容
+- **`openclaw_agents/critic/`、`openclaw_agents/scraper/` 整個目錄**(共 ~51 KB / 12 個 .md 檔)— 早期 5-agent 設計遺物,3-agent refactor 已不再啟用,`data.py:368-378` 也明確註解「Critic 移除、Scraper 併入 collector」
+- **`__pycache__/` 目錄**(~312 KB,6 個 .pyc) — 跑一次自動重生,無保留必要
+
+### Total
+程式碼 ~196 行 + CSS ~94 行 + 12 個 .md + 7 個自動生成檔 + 1 空檔。`openclaw_agents/` 從 5 個子目錄縮為 3 個(advisor / analyst / collector),與 README 描述一致。
+
+### Verification
+```powershell
+cd C:\Users\tunai\Downloads\aqi-tw-personal-main
+.venv\Scripts\python.exe -m py_compile app.py charts.py styles.py _city_detail.py data.py tsdb.py
+```
+- `python -m py_compile` 全綠通過
+- `Grep` 確認:`generate_forecast|generate_history_with_forecast|generate_cleaning_report|make_forecast_chart|agent-report` 在程式碼層面已完全消失(只剩 CHANGELOG.md 歷史紀錄)
+- `find . -type f -size 0`(排除 .venv / .git)無結果 — 沒有殘留空檔
+- `ls openclaw_agents/` 只剩 advisor / analyst / collector
+
+---
+
 ## [2026-05-13] 第三輪修復:agent 卡片排版 + 刪除多頁 + 個人訂閱併入主 app + 刪預測 + 自動更新
 
 ### Fixed

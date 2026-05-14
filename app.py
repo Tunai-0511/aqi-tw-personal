@@ -1,9 +1,36 @@
 """
-🦞 LobsterAQI · Taiwan Air Quality Multi-Agent Monitoring Platform
-==================================================================
-Streamlit single-page application. Run with:
+🦞 LobsterAQI · 台灣空氣品質多代理人監控平台 (Multi-Agent Monitoring Platform)
+====================================================================================
+
+這是專案的主程式 — 一個 Streamlit 單頁應用。執行方式:
 
     streamlit run app.py
+
+頁面架構(由上至下):
+  - **頂部封面 (Cover)** :品牌標題 + 「啟動 Pipeline」按鈕 + 模式狀態指示
+  - **SECTION · 01 三隻 agent 協作視覺化**:像素風辦公室 + agent 群組聊天室
+  - **SECTION · 02 即時 AQI 主儀表板**:時間軸 + 聚焦城市 + 排名 + 地圖 + 散點 + 新鮮度
+  - **SECTION · 03 24 小時趨勢**:多城市 AQI 趨勢線
+  - 熱力圖 + 雷達圖 + 風玫瑰 + 民間 vs 官方比較 + 過去 7 天紀錄板
+  - **個人化推薦區**:依使用者敏感族群給建議
+  - **SECTION · 04 個人訂閱**:產生 OpenClaw cron 指令的表單
+  - **右下角浮動 AI 助理**:LINE 風格聊天視窗,使用 RAG + LLM 回答問題
+
+核心設計原則:
+  1. **State 集中在 `st.session_state`**:`pipeline_done` / `snapshot` / `ts_df` 等
+  2. **資料流向**:Pipeline 按鈕 → run_pipeline() → 寫 session_state → 圖表渲染
+  3. **無頁面切換**:所有功能在單一 Streamlit script,城市深入是 modal dialog
+  4. **真實 API 優先,Mock 兜底**:EPA 失敗才用合成資料,且 UI 標示 MOCK
+  5. **每小時自動更新**:`st.fragment(run_every="60s")` 監控,滿 60 分鐘自動重跑
+
+關鍵 session_state 欄位(完整清單在 init_state 函式):
+  - `pipeline_done` : 是否跑過至少一次 Pipeline
+  - `snapshot`     : 20 城市當下 AQI 快照 DataFrame
+  - `ts_df`        : 24h 時序資料 DataFrame
+  - `data_mode`    : "real" 或 "mock"(影響 UI 標示)
+  - `chat_history` : AI 助理的對話歷史
+  - `rag_chunks`   : RAG 知識庫的所有片段(WHO/EPA/Lancet/上傳 PDF)
+  - `last_pipeline_run_at` : 上次 Pipeline 完成時間(自動更新邏輯用)
 """
 from __future__ import annotations
 
@@ -14,11 +41,12 @@ import shlex
 import subprocess
 import time
 from datetime import datetime, timedelta
-from html import escape
+from html import escape   # 用於把使用者輸入或 LLM 輸出 escape 後安全嵌入 HTML
 
 import pandas as pd
 import streamlit as st
 
+# data 模組:所有資料生成 / API 抓取 / LLM 呼叫的單一入口
 from data import (
     AGENTS, AQI_LEVELS, CITIES, CITY_BY_ID, GROUP_ADVICE,
     LLM_PROVIDERS, OUTDOOR_ACTIVITIES, POLLUTANTS, SENSITIVE_GROUPS,
@@ -35,9 +63,10 @@ from data import (
     send_discord_webhook,
 )
 import tsdb
-# OpenClaw is kept for cron push + MEMORY.md write (NOT for in-app LLM calls).
-# Imported lazily where needed (subscribe page, MEMORY write button).
+# OpenClaw 只用於 cron 排程推送 + MEMORY.md 跨會話記憶(NOT 用於 in-app LLM 呼叫,
+# 因為走 gateway 會多 30-60 秒插件冷啟)。lazy import 在 subscribe 區段需要時才載。
 from styles import AGENT_STAGE_CSS, DARK_THEME_CSS
+# charts 模組:所有 Plotly 圖表工廠
 from charts import (
     make_aqi_gauge,
     make_city_ranking,
@@ -54,38 +83,60 @@ from charts import (
 )
 
 # =============================================================================
-# Page setup
+# 頁面基本設定 (Page setup)
 # =============================================================================
+# Streamlit 的 `set_page_config` 只能在 script 最頂層呼叫一次,
+# 否則會觸發 StreamlitAPIException。
 st.set_page_config(
     page_title="LobsterAQI · Taiwan Air Quality Multi-Agent System",
     page_icon="🦞",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    layout="wide",                        # 寬版佈局,讓圖表有足夠空間
+    initial_sidebar_state="expanded",     # 預設展開 sidebar(設定區)
 )
+# 注入兩段 CSS:深色主題 + 像素辦公室動畫
+# `unsafe_allow_html=True` 允許 raw HTML(預設 Streamlit 會 escape)
 st.markdown(DARK_THEME_CSS, unsafe_allow_html=True)
 st.markdown(AGENT_STAGE_CSS, unsafe_allow_html=True)
 
 # =============================================================================
-# Session state
+# Session State 初始化 (Session State Init)
+# =============================================================================
+# Streamlit 每次 rerun 都重新跑整個 script,但 session_state 跨 rerun 保存。
+# 這是 Streamlit 唯一能在 rerun 之間保存狀態的機制。
+# `init_state()` 在 script 啟動時呼叫一次,把所有需要的 key 設成預設值。
 # =============================================================================
 def init_state():
+    """初始化 st.session_state 的所有預設值。
+
+    `setdefault` 確保:已存在的 key 不會被覆寫(保留使用者已輸入的值),
+    新 key 才會被建立。在每次 rerun 都呼叫是安全的。
+
+    所有狀態欄位的含義見 module docstring 與下方逐欄註解。
+    """
     defaults = {
-        "pipeline_done":   False,
-        "selected_city":   None,   # set by clicking bars in the city ranking chart
-        "active_agent":    None,
-        "comm_log":        [],
-        "current_step":    -1,
-        # Auto-refresh: when True, the hourly fragment re-runs the pipeline.
-        # Defaults to True so a user who walks away comes back to fresh data.
+        # ── Pipeline 執行狀態 ──
+        "pipeline_done":   False,            # 是否跑過至少一次 Pipeline(影響 UI 顯示哪些 section)
+        "selected_city":   None,             # 使用者在排名圖點選的城市(聚焦)
+        "active_agent":    None,             # Pipeline 跑到哪個 agent(用於高亮 UI)
+        "comm_log":        [],               # 3-agent 群組聊天室的訊息歷史
+        "current_step":    -1,               # Pipeline 進度(0=A 採集 / 1=B 分析 / 2=C 預警)
+
+        # ── 自動更新設定 ──
+        # 啟用時,每小時整點 fragment 會檢查是否需要重跑 Pipeline。
+        # 預設 True — 使用者離開電腦一小時回來看到的會是新鮮資料而非舊的。
         "auto_refresh_enabled": True,
-        "last_pipeline_run_at": None,   # datetime of last completed run
-        # In-app LLM (direct multi-provider) — fast path, no OpenClaw routing
-        "llm_provider":  "anthropic",
-        "llm_key":       "",
-        "llm_model":     "",     # auto-resolved from provider default if empty
-        "llm_base_url":  "",     # auto-resolved from provider default if empty
-        # OpenClaw is still used out-of-band for cron push + MEMORY.md.
-        # Kept as compat stubs so subscribe page / personalization section still work.
+        "last_pipeline_run_at": None,       # 上次完成 Pipeline 的時間(datetime)
+
+        # ── In-app LLM 設定 ──
+        # 直接呼叫各家 LLM HTTP API,毫秒級回應(不走 OpenClaw 30-60s gateway)
+        "llm_provider":  "anthropic",        # 預設 Claude
+        "llm_key":       "",                 # 使用者貼進來的 API key(本機 session,不上雲)
+        "llm_model":     "",                 # 空字串會 fallback 到 LLM_PROVIDERS 的 default_model
+        "llm_base_url":  "",                 # 空字串會用 provider 預設 endpoint
+
+        # ── OpenClaw 相容對應表 ──
+        # 早期 5-agent 設計的相容 stub,讓訂閱頁與個人化推薦的舊邏輯不會 KeyError。
+        # 實際 Pipeline 只用 collector / analyst / advisor 三個。
         "openclaw_agent_map":     {
             "collector": "collector",
             "scraper":   "scraper",
@@ -93,75 +144,113 @@ def init_state():
             "critic":    "critic",
             "advisor":   "advisor",
         },
-        # EPA Open Data Token (optional; public endpoint works without it)
-        "epa_key":                "",
-        # Discord webhook URL — Pipeline 跑完會 POST 摘要到這個 URL（選填）
-        "discord_webhook_url":    "",
-        # Snapshot data (None until pipeline runs)
-        "snapshot":        None,
-        "ts_df":           None,          # 24h history (EPA aqx_p_488 preferred, CAMS fallback)
-        "cams_ts_df":      None,          # 24h history from Open-Meteo CAMS (always populated when reachable)
-        "citizen_df":      None,          # LASS-net Airbox per-city aggregate
-        "lass_cleaning":   None,          # Real CleaningReport from LASS fetch
-        "data_mode":       "mock",        # "mock" | "real"
-        "llm_analysis":    "",            # 分析師 (B) — risk-analysis report
-        "agent_c_advisories": "",         # 預警員 (C) — health advisories per sensitive group
-        # RAG chunks — pre-seeded with WHO/EPA/Lancet/MOENV starter snippets,
-        # PDF uploads append real extracted paragraphs (see sidebar handler).
-        "rag_chunks":      [],            # populated lazily via _seed_rag_chunks()
-        "rag_files":       [],            # display metadata for uploaded files (name, size, n_chunks)
-        "chat_history":    [],
-        "trend_cities":    ["taipei", "taichung", "kaohsiung", "hualien", "kinmen"],
-        "radar_cities":    ["taipei", "yunlin", "kaohsiung", "kinmen"],
-        "selected_groups": [],
-        "user_city":       "taipei",
-        "user_conditions": [],
-        "user_activity":   "running",
-        "show_chat":       False,
-        "chat_expanded":   False,    # floating panel open/closed
-        "selected_hour":   None,     # time scrubber position (None = current snapshot)
+
+        # ── 外部服務金鑰 ──
+        "epa_key":                "",        # 環境部 EPA Open Data Token(必填才能拿到真實資料)
+        "discord_webhook_url":    "",        # Discord webhook(選填,Pipeline 跑完會 POST 摘要)
+
+        # ── 快照 / 時序資料 ──
+        # 都是 DataFrame,Pipeline 跑完才有值。
+        "snapshot":        None,             # 20 城市當下快照
+        "ts_df":           None,             # 24h 歷史(EPA aqx_p_488 優先,CAMS fallback)
+        "cams_ts_df":      None,             # 24h 歷史(CAMS 模型,獨立保留供熱力圖切換)
+        "citizen_df":      None,             # 民間 vs 官方 PM2.5 對比 DataFrame
+        "lass_cleaning":   None,             # 真實的 LASS 清洗報告 CleaningReport
+
+        # ── 資料模式 ──
+        # "real" = EPA API 成功,所有數值是真的
+        # "mock" = EPA 失敗 fallback,合成資料,UI 會在頂部顯示 MOCK 警告
+        "data_mode":       "mock",
+
+        # ── LLM 輸出快取 ──
+        "llm_analysis":    "",               # 分析師(B)的風險分析報告
+        "agent_c_advisories": "",            # 預警員(C)的 5 類敏感族群建議
+
+        # ── RAG 知識庫 ──
+        # 預先植入 WHO/EPA/Lancet/MOENV 4 份權威文獻;使用者上傳 PDF 會 append。
+        # 詳細運作見 RAG 區段(本檔 L160-294)。
+        "rag_chunks":      [],               # 所有 chunk 的 list[dict]
+        "rag_files":       [],               # 上傳檔案的 metadata(顯示用)
+
+        # ── 聊天 / UI 狀態 ──
+        "chat_history":    [],               # AI 助理對話歷史 list[{"role": "user"/"assistant", "content": "...", ...}]
+        "trend_cities":    ["taipei", "taichung", "kaohsiung", "hualien", "kinmen"],   # 趨勢圖預設城市
+        "radar_cities":    ["taipei", "yunlin", "kaohsiung", "kinmen"],                # 雷達圖預設城市
+        "selected_groups": [],               # 個人化推薦的敏感族群選擇
+        "user_city":       "taipei",         # 個人化推薦的「我的城市」
+        "user_conditions": [],               # 個人化推薦的健康狀況
+        "user_activity":   "running",        # 個人化推薦的關心活動類型
+        "show_chat":       False,            # 已不使用(legacy)
+        "chat_expanded":   False,            # 浮動聊天面板是展開還是收起(FAB)
+        "selected_hour":   None,             # 時間軸 slider 位置(None = 當前快照)
     }
+    # setdefault 而非直接 assignment — 保留使用者已輸入的值
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
 
 init_state()
 
-# Data lives in session_state and is populated during run_pipeline().
+# 資料都活在 session_state,run_pipeline() 填入後其他區段才能讀取。
 
 
 # =============================================================================
-# Auto-refresh — fires every minute via st.fragment(run_every) so we don't have
-# to block the main script. When the configured cadence (default: 60 minutes)
-# elapses since the last completed pipeline AND the user has the toggle on, we
-# flag the pipeline to re-run on the next full-app rerun.
+# 自動更新心跳 (Auto-refresh Tick)
+# =============================================================================
+# 使用 `st.fragment(run_every="60s")` 註冊一個每分鐘自動執行的小區塊。
+# fragment 的好處是「只重跑這段函式」而不重跑整個 app,避免影響使用者
+# 正在閱讀的 UI。當條件成熟時(60 分鐘後)才主動 `st.rerun(scope="app")`
+# 觸發全頁重跑 → 觸發 Pipeline 重新執行。
 # =============================================================================
 @st.fragment(run_every="60s")
 def _auto_refresh_tick() -> None:
+    """每分鐘檢查一次是否該自動重跑 Pipeline。
+
+    觸發條件(必須全部成立):
+      1. 使用者開啟了 sidebar「🔄 每小時自動更新數據」toggle
+      2. Pipeline 已經跑過至少一次(`pipeline_done=True`)— 第一次必須使用者手動啟動
+      3. 距上次 Pipeline 完成已 >= 60 分鐘
+
+    觸發後:
+      - 設 `_pipeline_should_run=True`(後續主腳本會偵測這個 flag)
+      - 用 `st.rerun(scope="app")` 強制全頁重跑(scope="app" 才會跳出 fragment 範圍)
+    """
     if not st.session_state.get("auto_refresh_enabled", True):
         return
     if not st.session_state.get("pipeline_done"):
-        return  # don't auto-start; user must click launch the first time
+        return  # 沒跑過 Pipeline 不自動啟動;讓使用者第一次手動點(防止冷啟意外消耗 API 配額)
     last = st.session_state.get("last_pipeline_run_at")
     if last is None:
         return
     elapsed_min = (datetime.now() - last).total_seconds() / 60
     if elapsed_min >= 60:
         st.session_state["_pipeline_should_run"] = True
-        # Full-app rerun so the pipeline-launch logic further down the script
-        # picks up the flag — a fragment-scoped rerun would re-fire just this
-        # tick and not actually trigger the pipeline placeholders.
+        # 全頁重跑(scope="app")才能觸發後面的 pipeline launch 區段;
+        # 預設 scope="fragment" 只會再跑這個 tick 函式,Pipeline 不會被觸發。
         st.rerun(scope="app")
 
 
-_auto_refresh_tick()
+_auto_refresh_tick()  # 註冊 fragment(此呼叫立即返回,fragment 在背景定時觸發)
 
 
 # =============================================================================
-# RAG knowledge base (constants + helpers — used by both sidebar uploader and chat panel)
+# RAG 知識庫 (Retrieval-Augmented Generation Knowledge Base)
 # =============================================================================
+# RAG 是「先用關鍵字找出相關文獻片段,再把片段塞進 LLM prompt 當上下文」的技巧,
+# 讓 LLM 可以引用權威來源、避免幻覺,並提供可追溯的「引用」。
+#
+# 本專案的 RAG 是「輕量版」 — 用簡單的 token-overlap 計分(見 `retrieve_rag_chunks`)
+# 而非 vector embedding。優點:零依賴、零成本、易理解;缺點:無法處理同義詞。
+# 對於「AQI 相關健康問題」這個小型領域已足夠。
+#
+# 預植入的 4 份權威文獻:
+#   1. WHO Air Quality Guidelines 2021     ← 全球公共衛生標準
+#   2. US EPA NAAQS                        ← 美國環保署污染標準
+#   3. Lancet PM2.5 Cardiovascular 2023    ← 同行評審醫學期刊
+#   4. 台灣空氣品質指標技術手冊            ← 台灣官方分級依據
+# 使用者也可在 sidebar 上傳 PDF / TXT / MD,內容會被 pdfplumber 抽取成 chunks 後加入。
 # =============================================================================
-# FLOATING AI ASSISTANT — rendered before the cover so it's always available
-# =============================================================================
+
+# 預植入的 4 份權威知識(seed snippets)— 系統剛啟動就有的基礎知識
 RAG_SNIPPETS = [
     {"source": "WHO Air Quality Guidelines 2021",
      "quote": "PM2.5 年均不應超過 5 μg/m³，24 小時均值不應超過 15 μg/m³；長期暴露與心血管疾病、肺癌風險顯著相關。"},
@@ -174,17 +263,31 @@ RAG_SNIPPETS = [
 ]
 
 
-# ── Real-PDF RAG helpers ────────────────────────────────────────────────────
-# Chunks are { "source": str, "text": str, "page": int }.
-# The pre-seeded starter set comes from RAG_SNIPPETS above; uploaded PDFs/
-# TXT/MD files are extracted via pdfplumber and appended.
+# ─── PDF / TXT 抽取 helpers ─────────────────────────────────────────────────
+# RAG chunk 的資料結構: { "source": str, "text": str, "page": int }
+# - source:文獻名 + 頁碼(顯示在引用區)
+# - text:該 chunk 的文字內容(400-500 字)
+# - page:該 chunk 來自原文的第幾頁
+#
+# 預植入的 4 份來自 RAG_SNIPPETS;使用者上傳的 PDF/TXT/MD 用 pdfplumber 抽取後 append。
+# ─────────────────────────────────────────────────────────────────────────────
 
+# 用兩個換行(段落分隔)切割文字
 _PARA_SPLIT_RE = re.compile(r"\n\s*\n+")
 
 
 def _split_paragraphs(text: str, max_chars: int = 500) -> list[str]:
-    """Break a page's text into chunk-sized paragraphs (~400-500 chars).
-    Greedy fill: pack short paragraphs together, split overlong ones."""
+    """把一頁的文字切成 chunk 大小的段落(~400-500 字)。
+
+    策略 = greedy fill:
+      - 短段落整段保留(< max_chars)
+      - 超長段落用「。!?」等句尾標點分割,再累積到接近 max_chars 才切
+
+    為什麼是 500 字?
+      - 太短(<200):chunk 太多,retrieve 速度慢,且 LLM context 太碎
+      - 太長(>800):一個 chunk 涵蓋太多主題,精度下降
+      - ~500 字大約對應一個語義段落,平衡 retrieve 精度與 token 預算
+    """
     parts: list[str] = []
     for para in _PARA_SPLIT_RE.split(text or ""):
         para = para.strip()
@@ -209,10 +312,18 @@ def _split_paragraphs(text: str, max_chars: int = 500) -> list[str]:
 
 
 def _seed_rag_chunks() -> None:
-    """Idempotently inject the 4 starter chunks (WHO / EPA / Lancet / MOENV)
-    into st.session_state.rag_chunks. Uploaded files append to the same list."""
+    """確保 session_state.rag_chunks 已植入 4 份權威文獻(idempotent)。
+
+    呼叫時機:
+      - sidebar 渲染前(顯示 RAG 知識庫 UI 用)
+      - 使用者問 AI 助理時(retrieve_rag_chunks 之前確保有東西可檢索)
+
+    已植入過就直接 return(idempotent 確保不會重複加 4 份)。
+    使用者後續上傳的檔案會 append 到同一個 list,不會影響 starter chunks。
+    """
     if st.session_state.get("rag_chunks"):
         return
+    # 把 RAG_SNIPPETS 轉成 chunk 格式(統一 schema 後 retrieval 邏輯不用分支)
     st.session_state.rag_chunks = [
         {"source": s["source"], "text": s["quote"], "page": 1}
         for s in RAG_SNIPPETS
@@ -220,8 +331,19 @@ def _seed_rag_chunks() -> None:
 
 
 def _ingest_uploaded_file(f) -> int:
-    """Extract text from an uploaded PDF / TXT / MD into rag_chunks.
-    Returns the number of chunks added."""
+    """處理使用者上傳的 PDF / TXT / MD 檔,抽取內容並加入 rag_chunks。
+
+    PDF 用 pdfplumber 逐頁解析,每頁再切成 ~500 字段落。
+    TXT / MD 用 UTF-8 解碼後一樣切段。
+
+    每個 chunk 的 source 會自動加上頁碼,例「report.pdf · 頁 3」,
+    讓使用者問問題時,AI 引用區塊可以精確指向原文位置。
+
+    Returns
+    -------
+    int
+        新增的 chunk 數量(用於 sidebar 顯示「已加入 X 段」回饋)
+    """
     name = f.name.lower()
     added = 0
     try:
@@ -257,49 +379,83 @@ def _ingest_uploaded_file(f) -> int:
 
 
 def _score_chunk(query: str, chunk_text: str) -> float:
-    """Score how relevant `chunk_text` is to `query`. Uses 2-char n-gram
-    overlap so it works for mixed Chinese + English text without needing
-    a tokenizer."""
+    """計算 chunk_text 與 query 的相關度分數。
+
+    演算法:**2-char n-gram overlap**(字元級雙連字符重疊)
+      - 不需要分詞器(tokenizer)就能處理中英文混排
+      - 把 query 切成相鄰兩字元的集合,例「PM2.5 對心血管」→ {"PM", "M2", "2.", ".5", ...}
+      - 計算 chunk 中有多少 n-gram 出現在 query 集合中
+      - 用 √len(c) 標準化,避免短 chunk 因為總命中數少而被低估
+
+    為什麼不用 embedding?
+      - 零依賴,不需要 sentence-transformers 等模型(節省幾百 MB 下載)
+      - 對「AQI 健康問題」這個小型領域,字元 overlap 已夠用
+      - 缺點是不能處理同義詞(例「心血管」vs「心臟」會被當不同字串)
+    """
     q = (query or "").lower()
     c = (chunk_text or "").lower()
     if len(q) < 2 or len(c) < 2:
         return 0.0
+    # 用 set 去重 — 「AAAA」不會因為有 3 個 AA 就被加權 3 倍
     qgrams = {q[i:i+2] for i in range(len(q) - 1)}
     if not qgrams:
         return 0.0
     hits = sum(1 for i in range(len(c) - 1) if c[i:i+2] in qgrams)
-    # Length-normalised so short chunks aren't disadvantaged
+    # 長度標準化:對長度開根號,避免「過短 chunk 永遠贏」或「長 chunk 永遠輸」
     return hits / (len(c) ** 0.5)
 
 
 def retrieve_rag_chunks(query: str, top_k: int = 5) -> list[dict]:
-    """Return the top-k most relevant chunks for `query`. Falls back to the
-    first 4 (starter) chunks if no chunks score above zero — keeps the LLM
-    from running with zero context."""
+    """從所有 RAG chunks 中找出與 query 最相關的 top_k 個。
+
+    這是 RAG 流程的核心:LLM 收到使用者問題前,先用本函式檢索文獻片段,
+    把片段拼成 prompt 的 context,讓 LLM 有「資料可引用」、減少幻覺。
+
+    Fallback 策略:若沒有任何 chunk 分數 > 0(query 完全沒命中任何文獻),
+    退回前 4 個 starter chunks(WHO/EPA/Lancet/MOENV),確保 LLM 總有
+    至少 4 份權威來源可以參考,而不是 zero-context 自由發揮。
+
+    Parameters
+    ----------
+    query : str
+        使用者的問題
+    top_k : int
+        最多回傳幾個 chunks(預設 5,平衡引用品質與 token 預算)
+
+    Returns
+    -------
+    list[dict]
+        list of {"source", "text", "page"}
+    """
     chunks = st.session_state.get("rag_chunks") or []
     if not chunks:
         return []
+    # 對每個 chunk 計分,降冪排序
     scored = [(c, _score_chunk(query, c["text"])) for c in chunks]
     scored.sort(key=lambda x: x[1], reverse=True)
+    # 只保留有命中的(score > 0);若全 miss 則回 starter chunks 確保 LLM 有上下文
     top = [c for c, s in scored[:top_k] if s > 0]
     return top if top else chunks[: min(top_k, 4)]
 
 # =============================================================================
-# Helpers
+# 多代理人輔助函式 (Multi-agent Helpers)
 # =============================================================================
 def agent_color(agent_id: str) -> str:
+    """根據 agent id (A/B/C) 查回該 agent 的主題色(失敗預設青色)。"""
     return next((a["color"] for a in AGENTS if a["id"] == agent_id), "#00d9ff")
 
 
 def agent_name(agent_id: str) -> str:
+    """根據 agent id 查回中文名(失敗時直接回傳 id)。"""
     return next((a["name"] for a in AGENTS if a["id"] == agent_id), agent_id)
 
 
-# Participants in the multi-agent "group chat".
-# `name` is the Chinese display label shown in the chat-room.
-# `label` is the small glyph drawn inside the round avatar bubble — keep
-# these to one visual symbol that hints at the agent's job (not just the
-# generic A/B/C/D letter, which carries no meaning to a viewer).
+# 多代理人群組聊天室的「參與者清單」。
+# 每個 agent 用一個 dict 表示:
+#   name   中文名(顯示在聊天室訊息開頭)
+#   label  小型 emoji icon(畫在圓形頭像泡泡中,提示該 agent 的工作性質)
+#   color  主題色(訊息泡泡邊框、頭像背景)
+# 一目了然比抽象的 A/B/C 字母更友善。
 PARTICIPANTS: dict[str, dict[str, str]] = {
     "A":       {"name": "採集者",       "label": "📡", "color": "#00d9ff"},
     "B":       {"name": "分析師",       "label": "🧠", "color": "#9b59ff"},
@@ -318,6 +474,22 @@ def _participant(pid: str) -> dict[str, str]:
 
 
 def push_log(agent_id: str, msg: str, to: str = "SYS"):
+    """把一則「agent 對話」訊息加進群組聊天室 log。
+
+    Pipeline 跑各個階段時,會用本函式記錄「誰對誰說了什麼」,例如:
+      push_log("A", "拉到 EPA 即時資料", to="SYS")
+      push_log("B", "風險分析完成,轉交預警員", to="C")
+    這些訊息會即時顯示在主畫面右側的「🦞 #lobster-agents 群組聊天室」。
+
+    Parameters
+    ----------
+    agent_id : str
+        發送者代號(A/B/C/SYS/LLM/DB/WEBHOOK/USER)
+    msg : str
+        訊息內容(可含 emoji)
+    to : str
+        收件者代號;'*' 表示廣播給所有 agent
+    """
     now = datetime.now().strftime("%H:%M:%S")
     st.session_state.comm_log.append({
         "time":  now,
@@ -510,15 +682,38 @@ def run_pipeline(
     progress_ph=None,
     status_ph=None,
 ):
-    """Drive the 3-agent pipeline (採集者 → 分析師 → 預警員) with live UI
-    updates and optional real API calls.
+    """執行 3-agent Pipeline(採集者 → 分析師 → 預警員)並即時更新 UI。
 
-    The previous 5-agent design had an Agent D (民間感測員) and a Critic;
-    both were merged or removed in the refactor because:
-      - D's only job was an "evaluate cleaning quality" LLM comment that
-        the rest of the pipeline didn't use — the data fetch + clean
-        itself moved into 採集者 (A).
-      - The Critic graded the analyst's report but never gated retries.
+    這是整個應用的「核心執行函式」 — 使用者按下「啟動 Pipeline」按鈕後
+    就會觸發本函式。函式體內依序執行:
+
+      A. **採集者** (Collector) — 純 ETL,無 LLM
+         1. 拉 EPA 即時資料 (fetch_epa_realtime)
+         2. 並行拉氣象 (5 個區域代表城市)
+         3. 並行拉民間感測器 (CivilIoT + LASS,清洗去重)
+         4. 整合成 snapshot DataFrame + ts_df 時序
+
+      B. **分析師** (Analyst) — 用 LLM 寫風險分析報告
+         1. 從 RAG 檢索與 AQI 等級相關的文獻片段
+         2. 組合 prompt:「前 3 高 AQI + RAG context」
+         3. 呼叫 LLM (call_llm_api),把回應存到 `llm_analysis`
+
+      C. **預警員** (Advisor) — 用 LLM 產出 5 類敏感族群建議
+         1. 同樣用 RAG context + 前 3 高 AQI 城市資料
+         2. 呼叫 LLM,把回應存到 `agent_c_advisories`
+
+      整批寫入 SQLite tsdb(時序快取),供「過去 7 天」紀錄板使用。
+      若有設 Discord webhook,推送 Pipeline 摘要 embed。
+
+    Parameters
+    ----------
+    *_ph : st.empty | None
+        外部呼叫者(agent section)預先建立的 placeholder,讓 live update
+        直接寫到該位置而不是浮在頁面任意地方。None 則 fallback 到本地 st.empty。
+
+    歷史:早期 5-agent 設計有「D 民間感測員」與「Critic 品管員」,但 D 的
+    LLM 註解沒有下游使用 → 併入採集者;Critic 評分沒有 gate 任何 retry
+    → 移除。3-agent 重構讓邏輯更清晰。
     """
     st.session_state.comm_log              = []
     st.session_state.pipeline_done         = False
@@ -831,7 +1026,17 @@ def run_pipeline(
 
 
 # =============================================================================
-# Sidebar
+# 側邊欄 (Sidebar) — 設定區 + 資料源狀態
+# =============================================================================
+# Streamlit 預設右側展開的設定面板,包含:
+#   - LobsterAQI 品牌 logo
+#   - 資料來源狀態(EPA / Open-Meteo)
+#   - 自動更新 toggle(本輪新增功能)
+#   - LLM 提供商選擇 + API key 輸入
+#   - EPA API token 輸入
+#   - Discord webhook URL 輸入
+#   - RAG 知識庫 PDF 上傳區
+#   - SQLite 時序快取狀態
 # =============================================================================
 with st.sidebar:
     st.markdown(
@@ -1231,7 +1436,18 @@ ANTI_HALLUCINATION_SYSTEM = (
 
 
 def _build_chat_context() -> str:
-    """Build a structured, factual snapshot of all current data for the LLM."""
+    """組裝給 AI 助理 LLM 的「結構化事實上下文」。
+
+    將 snapshot 中所有城市的當下數據、Pipeline 分析師 / 預警員的輸出,
+    全部以條列方式列出。LLM 在回答使用者問題時必須引用這些數值,
+    不可編造其他城市或數字(由 ANTI_HALLUCINATION_SYSTEM prompt 強制)。
+
+    為什麼這樣設計?
+      - 與其讓 LLM 各家自己「猜」AQI 數值,不如把真實數據塞進 prompt
+      - 中文 + 結構化 prefix 「=== 資料快照 ===」讓 LLM 易解析
+      - 同時把 mode tag (LIVE / MOCK) 帶進來,LLM 可以據此選擇措辭
+        (例如 MOCK 時提醒使用者「目前顯示模擬資料」)
+    """
     snap = st.session_state.snapshot
     if snap is None:
         return "（目前尚未啟動 Pipeline，無即時資料可供參考。）"
@@ -1262,15 +1478,27 @@ def _build_chat_context() -> str:
 
 
 def _render_chat_panel() -> None:
-    """Render the chat conversation inside the floating LINE-style panel.
+    """渲染右下角浮動 AI 助理對話面板(LINE 風格 UI)。
 
-    The caller (`if st.session_state.chat_expanded:` block) renders the
-    contact bar and close button above us. We render in this order:
-      1. history stream (via st.empty placeholder, so we can show a typing
-         bubble while the LLM is being called)
-      2. references expander (if the last assistant message has refs)
-      3. st.chat_input — Streamlit pins this to the bottom of the container
-         regardless of code position.
+    呼叫者(`if st.session_state.chat_expanded:` 區塊)已先渲染聯絡欄
+    (龍蝦頭像 + 名稱 + 「在線」狀態)與右上角關閉按鈕。
+    本函式接著按以下順序渲染面板內容:
+
+      1. **對話歷史** — 用 `st.empty()` 預留位置,LLM 思考時可顯示「打字中」氣泡
+      2. **使用者輸入框** — `st.chat_input`,Streamlit 自動釘在容器最底
+      3. 送出後:
+         - 寫入 user message → 歷史
+         - 用 retrieve_rag_chunks 找相關文獻
+         - 組合 prompt(context + RAG + 使用者問題)
+         - 呼叫 call_llm_api
+         - 寫入 assistant message + refs → 歷史
+         - `st.rerun()` 釋放 chat_input widget,讓使用者可連續輸入(Fix-3a)
+
+    CSS 部分(styles.py):
+      - `.st-key-floating_chat`:面板 fixed 在右下角,640px 高度
+      - `.st-key-chat_history`:flex column + justify-content: flex-end,
+        確保歡迎訊息與短對話貼底(Fix-3b)
+      - chat_input 有 `order: 99` 強制永遠在最底
     """
     pipeline_ready = st.session_state.pipeline_done and st.session_state.snapshot is not None
     has_llm        = bool(st.session_state.llm_key.strip())
@@ -1487,7 +1715,11 @@ else:
 
 
 # =============================================================================
-# COVER PAGE  (always rendered at top; below it sit theater + sections)
+# 封面區 (Cover Page) — 永遠在頁面最上方
+# =============================================================================
+# 封面顯示:LobsterAQI 品牌標題 + 副標 + 3 個 agent 功能介紹 + 狀態指示
+# 大型「啟動 Pipeline」按鈕在這裡,使用者第一次進入時必須點它才會跑 Pipeline。
+# 封面下方依序是 SECTION · 01 (Agent 劇場) → 02 (主儀表板) → 03 (趨勢) ... 04 (訂閱)
 # =============================================================================
 _llm_prov_name = LLM_PROVIDERS[st.session_state.llm_provider]["name"]
 _has_llm_key   = bool(st.session_state.llm_key.strip())
@@ -1616,7 +1848,11 @@ data_mode   = st.session_state.data_mode
 
 
 # =============================================================================
-# SECTION · AGENTS (always visible — shows inactive desks before pipeline runs)
+# SECTION · 01 三隻 agent 協作視覺化 (AGENT THEATER)
+# =============================================================================
+# 左欄:像素風辦公室(三個工作桌,active 那個會發光)+ 採集者清洗報告
+# 右欄:狀態指示 + 群組聊天室(顯示 push_log 累積的所有 agent 對話)
+# 永遠可見 — Pipeline 還沒跑時也會顯示「inactive 工作桌」讓使用者知道架構。
 # =============================================================================
 st.markdown("<a id='agents'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 01</span>", unsafe_allow_html=True)
@@ -1723,7 +1959,16 @@ if not st.session_state.pipeline_done or snapshot is None:
     st.stop()
 
 # =============================================================================
-# SECTION · MAIN DASHBOARD
+# SECTION · 02 即時 AQI 主儀表板 (MAIN DASHBOARD)
+# =============================================================================
+# 整個應用的核心 — Pipeline 跑完後最重要的視覺化區域。包含:
+#   - 時間軸 slider:可拖動看過去 24h 的歷史快照
+#   - 「現在 X · 24h 歷史最新 Y · 落後 Z 分鐘」三段資料新鮮度標籤
+#   - 第一列:聚焦城市資訊 + 城市排名長條圖
+#   - 第二列:台灣地圖散點 + PM2.5 vs AQI 散點
+#   - 第三列:20 個城市的資料新鮮度卡片(< 5min 綠 / < 10min 黃 / 其他橘)
+#   - 24h × 20 城市熱力圖(EPA / CAMS 雙 tab 切換)
+#   - 過去 7 天 AQI 紀錄板(從 tsdb 累積的 CAMS 資料)
 # =============================================================================
 st.markdown("<a id='dash'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 02</span>", unsafe_allow_html=True)
@@ -1942,8 +2187,10 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 
 # =============================================================================
-# SECTION · TRENDS — forecast/prediction column removed (使用者改用訂閱推送獲取
-# 未來資訊，預測圖意義不大)。
+# SECTION · 03 24 小時趨勢 (TRENDS)
+# =============================================================================
+# 多城市的 24h AQI 趨勢線圖。使用者可在 multiselect 選擇要比較的城市。
+# 原本右側還有 6h AQI 預測,但 2026-05-13 移除(使用者改用訂閱推送獲取未來資訊)。
 # =============================================================================
 st.markdown("<a id='trend'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 03</span>", unsafe_allow_html=True)
@@ -2059,7 +2306,11 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 
 # =============================================================================
-# SECTION · POLLUTANTS
+# 污染物深入區 (POLLUTANTS) — 多城市污染物比較
+# =============================================================================
+# 雷達圖 + 堆疊長條圖,看「哪個城市主要被哪種污染物推起來」。
+# 雷達圖把 6 種污染物的相對強度畫在同一張圖;
+# 堆疊圖則顯示每個城市的「污染物組成比例」。
 # =============================================================================
 st.markdown("<a id='pollute'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 04</span>", unsafe_allow_html=True)
@@ -2100,7 +2351,11 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 
 # =============================================================================
-# SECTION · ENVIRONMENT
+# 環境因子區 (ENVIRONMENT) — 氣象與 AQI 的相關性分析
+# =============================================================================
+# 風玫瑰圖(8 方位的城市風向分佈,色階 = 該方位平均 AQI)+
+# 濕度散點圖(濕度 vs AQI + 線性回歸 + Pearson 相關係數)。
+# 用來探討「風向 / 濕度」是否與 AQI 顯著相關。
 # =============================================================================
 st.markdown("<a id='env'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 05</span>", unsafe_allow_html=True)
@@ -2170,7 +2425,11 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 
 # =============================================================================
-# SECTION · DATA SOURCES
+# 資料來源比較 (DATA SOURCES) — 民間 vs 官方
+# =============================================================================
+# 用並排長條圖比較「官方 EPA 測站 PM2.5」與「民間 LASS-net Airbox PM2.5」
+# 在每個城市的差異。理論上應接近,但民間感測器精度較差、放置位置
+# (如住家陽台 / 街角)更貼近實際呼吸環境,差異本身就是分析價值。
 # =============================================================================
 st.markdown("<a id='source'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 06</span>", unsafe_allow_html=True)
@@ -2242,7 +2501,11 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 
 # =============================================================================
-# SECTION · HEALTH
+# 健康預警區 (HEALTH) — 5 類敏感族群建議卡片
+# =============================================================================
+# 把預警員(C)生成的 LLM 建議,按 5 類敏感族群分卡顯示:
+# 老人 / 幼童 / 氣喘 / 心血管 / 孕婦,每張卡片用對應 emoji 與顏色標記。
+# 若 LLM 未跑,fallback 到 GROUP_ADVICE(data.py)的靜態建議。
 # =============================================================================
 st.markdown("<a id='health'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 07</span>", unsafe_allow_html=True)
@@ -2347,7 +2610,14 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 
 # =============================================================================
-# SECTION · PERSONALIZATION
+# 個人化推薦區 (PERSONALIZATION) — 客製化建議
+# =============================================================================
+# 使用者選擇:我的城市 / 敏感族群 / 關心活動 → 系統給出:
+#   - 該城市目前的 AQI + 該族群的建議
+#   - 該活動的「最佳時段」(若 EPA 預測可用)
+#   - 過去 7 天該城市的 AQI 趨勢圖(從本機 SQLite 取)
+#   - 與「上週同期」的對比(高 / 低 X%)
+# 不需要 LLM 也能跑,但有 LLM 時會額外給個人化文字建議。
 # =============================================================================
 st.markdown("<a id='perso'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 08</span>", unsafe_allow_html=True)
@@ -2544,9 +2814,15 @@ else:
     )
 
 # =============================================================================
-# SECTION · PERSONAL SUBSCRIPTION (was pages/3_個人訂閱.py — merged into main
-# app so the sidebar stays clean and the form is reachable without page
-# switching).
+# SECTION · 個人訂閱 (PERSONAL SUBSCRIPTION) — 原 pages/3_個人訂閱.py 的內容
+# =============================================================================
+# 2026-05-13 從獨立分頁併入主 app,讓 sidebar 保持乾淨,使用者不必跳轉。
+# 表單收集:城市 / 敏感族群 / AQI 閾值 / 推送頻道(Discord/Telegram/Slack/Matrix)
+#       / 頻率(每小時/30分鐘/每天 08 點)
+# 送出後產生一條 `openclaw cron add ...` 指令,可:
+#   1. 複製到 terminal 手動跑(無需 OpenClaw 在背景跑)
+#   2. 用 subprocess 直接在頁面內執行(若 OpenClaw 已安裝)
+# 註冊成功後 OpenClaw 會定時觸發 analyst agent,把該城市的 AQI 摘要推送到指定頻道。
 # =============================================================================
 st.markdown("<a id='subscribe'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow' style='margin-top:1.5rem; display:inline-block;'>SECTION · 04</span>", unsafe_allow_html=True)
