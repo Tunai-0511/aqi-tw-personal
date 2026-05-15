@@ -460,6 +460,131 @@ def last_write_time() -> datetime | None:
         return None
 
 
+# ─── 健康日誌 (Health Diary) — P1 #2 ──────────────────────────────────────
+# 使用者每日打卡記錄症狀 / 戶外時數,跨 session 持久化在本機 SQLite。
+# 與 AQI 時序關聯後可看出「個人對哪種污染物較敏感」。
+# ──────────────────────────────────────────────────────────────────────────
+
+_HEALTH_DIARY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS health_diary (
+    date         TEXT    NOT NULL,        -- YYYY-MM-DD,主鍵之一(同一天只能有一筆)
+    city_id      TEXT    NOT NULL,        -- 該天的常駐城市(允許不同天不同地)
+    symptom_score INTEGER NOT NULL,        -- 症狀嚴重度 0(無)~5(嚴重),使用者主觀填寫
+    outdoor_min   INTEGER NOT NULL,        -- 該天戶外時數(分鐘),自我估算
+    note          TEXT,                    -- 自由文字備註(吃了什麼藥、活動類型等)
+    created_at    TEXT    NOT NULL,        -- ISO 時間戳(自動填入)
+    PRIMARY KEY (date, city_id)
+)
+"""
+_HEALTH_DIARY_INDEX = "CREATE INDEX IF NOT EXISTS idx_diary_date ON health_diary(date)"
+
+
+def _init_health_diary() -> None:
+    """確保 health_diary 表存在(idempotent)。每個 diary 寫入 / 讀取前都會呼叫。"""
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(_HEALTH_DIARY_SCHEMA)
+        c.execute(_HEALTH_DIARY_INDEX)
+
+
+def upsert_diary_entry(
+    date: str,
+    city_id: str,
+    symptom_score: int,
+    outdoor_min: int,
+    note: str = "",
+) -> None:
+    """新增 / 更新一筆健康日誌(同一天同城市覆蓋,使用 INSERT OR REPLACE)。
+
+    Parameters
+    ----------
+    date : str
+        YYYY-MM-DD;呼叫者通常傳 `datetime.now().strftime("%Y-%m-%d")`
+    city_id : str
+        該天的常駐城市(允許之後跨日改地點)
+    symptom_score : int
+        症狀嚴重度,clip 在 [0, 5]
+    outdoor_min : int
+        戶外時數(分鐘),clip 在 [0, 1440]
+    note : str
+        自由文字備註
+    """
+    _init_health_diary()
+    symptom_score = max(0, min(5, int(symptom_score)))
+    outdoor_min   = max(0, min(1440, int(outdoor_min)))
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            "INSERT OR REPLACE INTO health_diary "
+            "(date, city_id, symptom_score, outdoor_min, note, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (date, city_id, symptom_score, outdoor_min, note or "", now_iso),
+        )
+
+
+def read_diary(city_id: str | None = None, days: int = 30) -> pd.DataFrame:
+    """讀取最近 N 天的健康日誌。
+
+    Parameters
+    ----------
+    city_id : str | None
+        指定城市過濾;None 表示不過濾(回傳所有城市)
+    days : int
+        往回看多少天,預設 30
+
+    Returns
+    -------
+    pd.DataFrame
+        欄位:date(datetime)、city_id、symptom_score、outdoor_min、note、created_at
+        無紀錄時回空 DataFrame
+    """
+    _init_health_diary()
+    cutoff = (datetime.now() - timedelta(days=days)).date().isoformat()
+    q = "SELECT * FROM health_diary WHERE date >= ?"
+    params: list = [cutoff]
+    if city_id:
+        q += " AND city_id = ?"
+        params.append(city_id)
+    q += " ORDER BY date ASC"
+    with sqlite3.connect(DB_PATH) as c:
+        df = pd.read_sql_query(q, c, params=params)
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+def diary_with_aqi(city_id: str, days: int = 30) -> pd.DataFrame:
+    """合併「健康日誌」與「該日 AQI 平均」,供散點圖 / 相關性分析使用。
+
+    JOIN 邏輯:
+      - 健康日誌的 date(例 '2026-05-10')
+      - 對齊 aqi_snapshots 中該日(00:00 ~ 23:59)的 cams_hourly 平均 AQI
+
+    Returns
+    -------
+    pd.DataFrame
+        欄位:date、symptom_score、outdoor_min、avg_aqi、peak_aqi、note
+    """
+    _init_health_diary()
+    cutoff = (datetime.now() - timedelta(days=days)).date().isoformat()
+    q = (
+        "SELECT d.date, d.symptom_score, d.outdoor_min, d.note, "
+        "       AVG(a.aqi) AS avg_aqi, MAX(a.aqi) AS peak_aqi "
+        "FROM health_diary d "
+        "LEFT JOIN aqi_snapshots a "
+        "  ON a.city_id = d.city_id "
+        "  AND DATE(a.ts) = d.date "
+        "  AND a.source = 'cams_hourly' "
+        "WHERE d.city_id = ? AND d.date >= ? "
+        "GROUP BY d.date, d.symptom_score, d.outdoor_min, d.note "
+        "ORDER BY d.date ASC"
+    )
+    with sqlite3.connect(DB_PATH) as c:
+        df = pd.read_sql_query(q, c, params=[city_id, cutoff])
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
 def stats() -> dict:
     """一次回傳 sidebar 顯示用的彙總指標(列數、城市數、跑次、來源數等)。
 

@@ -13,7 +13,8 @@
   - **SECTION · 03 24 小時趨勢**:多城市 AQI 趨勢線
   - 熱力圖 + 雷達圖 + 風玫瑰 + 民間 vs 官方比較 + 過去 7 天紀錄板
   - **個人化推薦區**:依使用者敏感族群給建議
-  - **SECTION · 04 個人訂閱**:產生 OpenClaw cron 指令的表單
+  - **SECTION · 09 健康日誌**:每日打卡 + 症狀 vs AQI 相關性散點
+  - **SECTION · 10 個人訂閱**:產生 OpenClaw cron 指令的表單(含每日 Digest 模式)
   - **右下角浮動 AI 助理**:LINE 風格聊天視窗,使用 RAG + LLM 回答問題
 
 核心設計原則:
@@ -180,6 +181,8 @@ def init_state():
         "user_city":       "taipei",         # 個人化推薦的「我的城市」
         "user_conditions": [],               # 個人化推薦的健康狀況
         "user_activity":   "running",        # 個人化推薦的關心活動類型
+        # 個人 AQI 預警閾值(P1 #1):主畫面會 highlight「你的城市 AQI > 這個門檻」
+        "user_aqi_threshold": 100,           # 預設 100(對敏感族群不健康的界線)
         "show_chat":       False,            # 已不使用(legacy)
         "chat_expanded":   False,            # 浮動聊天面板是展開還是收起(FAB)
         "selected_hour":   None,             # 時間軸 slider 位置(None = 當前快照)
@@ -1081,6 +1084,28 @@ with st.sidebar:
             + "</div>",
             unsafe_allow_html=True,
         )
+
+    st.markdown(" ")
+
+    # ── 個人 AQI 預警閾值 (P1 #1) ──
+    # 使用者設定自己關心的「我的城市 AQI 超過多少要警告」,主畫面會自動 highlight。
+    # 預設 100(=EPA 對敏感族群不健康的界線)。
+    st.markdown("<div class='eyebrow'>個人 AQI 預警</div>", unsafe_allow_html=True)
+    st.session_state.user_aqi_threshold = st.slider(
+        "⚠ 我的 AQI 預警閾值",
+        min_value=50, max_value=200,
+        value=st.session_state.get("user_aqi_threshold", 100),
+        step=10,
+        key="user_aqi_threshold_slider",
+        help="當你的城市 AQI 超過這個值,主儀表板會顯示紅色警告橫幅",
+    )
+    st.markdown(
+        "<div class='tiny muted' style='line-height:1.5;'>"
+        f"當「{CITY_BY_ID.get(st.session_state.user_city, {}).get('name', '我的城市')}」"
+        f"AQI &gt; <b>{st.session_state.user_aqi_threshold}</b> 時警告"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown(" ")
 
@@ -2063,6 +2088,72 @@ if ts_df is not None and not ts_df.empty:
 focus_id = st.session_state.selected_city
 focus_row = snapshot[snapshot["city_id"] == focus_id].iloc[0] if focus_id else snapshot.sort_values("aqi", ascending=False).iloc[0]
 
+# ── 個人 AQI 預警橫幅 (P1 #1) ──────────────────────────────────────────
+# 比對使用者「我的城市」AQI 與個人預警閾值,超過即顯示醒目橫幅。
+# 同時用 tsdb.city_period_avg 計算「比上週同期 +X%」(P1 #4 歷史對比 highlight)。
+_my_city_id = st.session_state.get("user_city", "taipei")
+_my_threshold = int(st.session_state.get("user_aqi_threshold", 100))
+_my_row = snapshot[snapshot["city_id"] == _my_city_id]
+if not _my_row.empty:
+    _my_aqi = float(_my_row.iloc[0]["aqi"])
+    _my_name = _my_row.iloc[0]["city"]
+    _my_level = _my_row.iloc[0]["level"]
+    _my_color = _my_row.iloc[0]["color"]
+
+    # 歷史對比:本週(168h)平均 vs 上週(同窗寬)平均
+    try:
+        _this_avg, _prev_avg, _this_n, _prev_n = tsdb.city_period_avg(_my_city_id, this_hours=168)
+    except Exception:
+        _this_avg, _prev_avg, _this_n, _prev_n = None, None, 0, 0
+    if _this_avg is not None and _prev_avg is not None and _prev_avg > 0:
+        _delta_pct = (_this_avg - _prev_avg) / _prev_avg * 100
+        if _delta_pct >= 3:
+            _trend_badge = f"<span style='color:#ff8c42; font-weight:700;'>↑ 比上週 +{_delta_pct:.0f}%</span>"
+        elif _delta_pct <= -3:
+            _trend_badge = f"<span style='color:#00e676; font-weight:700;'>↓ 比上週 {_delta_pct:.0f}%</span>"
+        else:
+            _trend_badge = f"<span style='color:#8b95a8;'>≈ 與上週相當({_delta_pct:+.0f}%)</span>"
+    else:
+        _trend_badge = "<span style='color:#8b95a8;'>歷史資料不足無法對比</span>"
+
+    if _my_aqi > _my_threshold:
+        # 突破閾值 — 紅色顯眼橫幅 + 動畫
+        st.markdown(
+            f"<div style='margin:0.6rem 0 1rem 0; padding:0.9rem 1.2rem; "
+            f"background:linear-gradient(90deg, rgba(255,71,87,0.20), rgba(155,89,255,0.10)); "
+            f"border-left:4px solid #ff4757; border-radius:0 12px 12px 0; "
+            f"box-shadow:0 0 24px rgba(255,71,87,0.25);'>"
+            f"<div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.8rem;'>"
+            f"<div>"
+            f"<span style='font-size:1.05rem; font-weight:800; color:#ff4757;'>⚠ 你的城市突破預警閾值</span>"
+            f"<span style='color:#c0c8d8; margin-left:0.6rem;'>"
+            f"<b>{_my_name}</b> 目前 AQI <b style='color:{_my_color};'>{_my_aqi:.0f}</b>"
+            f"(<span style='color:{_my_color};'>{_my_level}</span>),"
+            f"已超過你的預警值 <b>{_my_threshold}</b>"
+            f"</span>"
+            f"</div>"
+            f"<div class='tiny'>{_trend_badge}</div>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        # 未突破 — 淡色資訊條,只顯示城市現況 + 歷史對比
+        st.markdown(
+            f"<div style='margin:0.4rem 0 0.8rem 0; padding:0.55rem 1rem; "
+            f"background:rgba(15,24,48,0.5); border-left:3px solid {_my_color}; "
+            f"border-radius:0 8px 8px 0; display:flex; justify-content:space-between; "
+            f"align-items:center; flex-wrap:wrap; gap:0.6rem;'>"
+            f"<div class='tiny'>"
+            f"📍 你的城市 <b>{_my_name}</b>:AQI <b style='color:{_my_color};'>{_my_aqi:.0f}</b>"
+            f"(<span style='color:{_my_color};'>{_my_level}</span>)"
+            f" · 預警閾值 {_my_threshold}"
+            f"</div>"
+            f"<div class='tiny'>{_trend_badge}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
 # Top row: Gauge + ranking
 d1, d2 = st.columns([3, 5])
 
@@ -2745,6 +2836,102 @@ with per2:
         unsafe_allow_html=True,
     )
 
+# ── 個人化敏感族群指數卡 (P1 #3) ─────────────────────────────────────────
+# 根據使用者勾選的健康狀況(SENSITIVE_GROUPS),計算「以你目前城市的 AQI,
+# 你今天可以在戶外活動幾小時 / 應採取什麼防護」 — 與 SECTION · 07 的
+# 「對所有人通用」建議不同,這裡的數字真正依使用者輸入而變化。
+#
+# 計算邏輯:
+#   每個敏感族群有一個「容忍 AQI」門檻(GROUP_AQI_LIMIT 字典):
+#     - 老人 / 心血管:60(較嚴格,稍微偏高就要減少戶外)
+#     - 氣喘 / 孕婦:50(最嚴格,WHO 推薦)
+#     - 幼童:70
+#   safe_hours = max(0, 12 - max(0, (current_aqi - limit)) * 0.15)
+#     - AQI 低於門檻:可活動 12 小時(全天)
+#     - 每超過 10 點:扣 1.5 小時戶外時間
+#   防護等級依差距:< 0 → 「正常活動」;0-30 → 「戴口罩」;30-60 → 「N95 + 短時間」;> 60 → 「室內為主」
+if conds:
+    st.markdown("<div class='eyebrow' style='margin-top:1.2rem;'>🩺 你的個人化健康指數</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='tiny muted' style='margin-bottom:0.5rem;'>"
+        f"基於 <b>{CITY_BY_ID[user_city]['name']}</b> 目前 AQI <b>{my_row['aqi']:.0f}</b>,"
+        f"計算每個你勾選的敏感族群「今日可戶外活動時數」與防護建議</div>",
+        unsafe_allow_html=True,
+    )
+
+    GROUP_AQI_LIMIT = {
+        "elderly":        60,   # 老人(較嚴)
+        "children":       70,   # 幼童
+        "asthma":         50,   # 氣喘(最嚴)
+        "cardiovascular": 60,   # 心血管
+        "pregnant":       50,   # 孕婦(最嚴)
+    }
+    GROUP_ADVICE_TIER = {
+        # tier_idx -> (color, action_text)
+        0: ("#00e676", "✓ 可正常戶外活動,維持基本衛生即可"),
+        1: ("#ffd93d", "🧣 建議配戴一般口罩,避免長時間激烈運動"),
+        2: ("#ff8c42", "😷 建議 N95/KF94,單次戶外不超過 1 小時"),
+        3: ("#ff4757", "🚫 強烈建議留在室內,必要時開啟空氣清淨機"),
+    }
+
+    cards_html = []
+    current_aqi = float(my_row["aqi"])
+    for gid in conds:
+        group = next(g for g in SENSITIVE_GROUPS if g["id"] == gid)
+        limit = GROUP_AQI_LIMIT.get(gid, 60)
+        excess = max(0, current_aqi - limit)
+        safe_hours = max(0.0, 12.0 - excess * 0.15)
+        # 決定防護等級
+        if excess <= 0:
+            tier = 0
+        elif excess <= 30:
+            tier = 1
+        elif excess <= 60:
+            tier = 2
+        else:
+            tier = 3
+        color, action = GROUP_ADVICE_TIER[tier]
+
+        cards_html.append(
+            f"<div class='glass-card' style='border-color:{color}55; "
+            f"background:linear-gradient(135deg, {color}10, rgba(15,24,48,0.5)); min-width:220px;'>"
+            f"<div style='display:flex; align-items:center; gap:0.6rem; margin-bottom:0.5rem;'>"
+            f"<div style='font-size:1.6rem;'>{group['icon']}</div>"
+            f"<div>"
+            f"<div style='font-weight:800; font-size:0.95rem;'>{group['label']}</div>"
+            f"<div class='tiny muted'>容忍 AQI ≤ {limit}</div>"
+            f"</div>"
+            f"</div>"
+            f"<div style='font-family:JetBrains Mono; font-size:1.8rem; font-weight:900; "
+            f"color:{color}; line-height:1; text-shadow:0 0 12px {color}44;'>"
+            f"{safe_hours:.1f}<span style='font-size:0.85rem; color:#8b95a8; margin-left:0.2rem;'>h</span>"
+            f"</div>"
+            f"<div class='tiny muted' style='margin:0.2rem 0 0.5rem 0;'>今日建議戶外時數</div>"
+            f"<div style='font-size:0.82rem; line-height:1.45; color:{color};'>"
+            f"{action}"
+            f"</div>"
+            f"</div>"
+        )
+
+    st.markdown(
+        f"<div style='display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.7rem;'>"
+        + "".join(cards_html) +
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    # 未勾選任何敏感族群 — 用提示 nudge 使用者去 sidebar 設定
+    st.markdown(
+        "<div class='glass-card' style='margin-top:1.2rem; text-align:center;'>"
+        "<div class='eyebrow'>🩺 個人化健康指數</div>"
+        "<div class='tiny muted' style='margin-top:0.4rem;'>"
+        "在左側「健康狀況」勾選你 / 家人符合的敏感族群,"
+        "這裡會自動計算每個族群「今日可戶外活動時數」與防護等級。"
+        "</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
 # ── 你城市的本週 AQI 歷史趨勢（本機 SQLite 時序快取）─────────────────────
 # Pulls the user's home city's hourly AQI over the past 168h from the
 # CAMS-hourly data stored in SQLite. The week-over-week comparison badge
@@ -2810,8 +2997,180 @@ else:
     st.plotly_chart(_fig, use_container_width=True,
                     config={"displayModeBar": False}, key="personal_week_trend")
     st.caption(
-        f"資料來源：本機 SQLite (`lobster_aqi.sqlite`) · CAMS-hourly · {len(_my_hist)} 筆 hourly 取樣"
+        f"資料來源:本機 SQLite (`lobster_aqi.sqlite`) · CAMS-hourly · {len(_my_hist)} 筆 hourly 取樣"
     )
+
+# =============================================================================
+# SECTION · 09(舊編號)→ 移至下方;這裡先放健康日誌
+# 健康日誌 (HEALTH DIARY) — P1 #2
+# =============================================================================
+# 使用者每天打卡記錄症狀嚴重度 / 戶外時數,持久化在本機 SQLite。
+# 累積後可繪製「症狀分數 vs 當日平均 AQI」散點圖,找出個人對空污的敏感度。
+# =============================================================================
+st.markdown("<a id='diary'></a>", unsafe_allow_html=True)
+st.markdown("<span class='eyebrow' style='margin-top:1.5rem; display:inline-block;'>SECTION · 09</span>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>健康日誌 · 個人空品敏感度紀錄</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div class='section-sub'>每天打卡 1 次「症狀分數 + 戶外時數」,系統會自動對應當日空品。"
+    "累積 2 週後可看出個人對 PM2.5 / O3 等污染物的敏感度傾向。</div>",
+    unsafe_allow_html=True,
+)
+
+diary_c1, diary_c2 = st.columns([2, 3])
+
+with diary_c1:
+    st.markdown("<div class='eyebrow'>今日打卡</div>", unsafe_allow_html=True)
+    _today_iso = datetime.now().strftime("%Y-%m-%d")
+    # 預載今天已有的紀錄(如果有),讓使用者可修改而非每次重填
+    _existing = tsdb.read_diary(city_id=user_city, days=2)
+    _today_row = _existing[_existing["date"].dt.strftime("%Y-%m-%d") == _today_iso] if not _existing.empty else None
+    _has_today = _today_row is not None and not _today_row.empty
+    _prefill = _today_row.iloc[0] if _has_today else None
+
+    with st.form("diary_form"):
+        diary_symptom = st.slider(
+            "😷 今日症狀嚴重度 (0=完全沒事, 5=非常不適)",
+            min_value=0, max_value=5,
+            value=int(_prefill["symptom_score"]) if _has_today else 0,
+            help="咳嗽 / 喘息 / 頭痛 / 喉嚨痛等任一空品相關症狀的綜合主觀評分",
+        )
+        diary_outdoor = st.number_input(
+            "🚶 今日戶外時數(分鐘)",
+            min_value=0, max_value=1440,
+            value=int(_prefill["outdoor_min"]) if _has_today else 60,
+            step=15,
+            help="今天大約在戶外(非完全室內)總共多少分鐘",
+        )
+        diary_note = st.text_input(
+            "📝 備註(選填)",
+            value=str(_prefill["note"]) if _has_today and _prefill["note"] else "",
+            placeholder="例:有戴口罩 / 吃了氣喘藥 / 在公園慢跑",
+        )
+        diary_submit = st.form_submit_button(
+            "💾 儲存今日紀錄(覆蓋已有)" if _has_today else "💾 儲存今日紀錄",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if diary_submit:
+        try:
+            tsdb.upsert_diary_entry(
+                date=_today_iso,
+                city_id=user_city,
+                symptom_score=diary_symptom,
+                outdoor_min=diary_outdoor,
+                note=diary_note,
+            )
+            st.success(f"✓ 已記錄 {_today_iso}({CITY_BY_ID[user_city]['name']})· 症狀 {diary_symptom}/5 · 戶外 {diary_outdoor} 分鐘")
+        except Exception as e:
+            st.error(f"儲存失敗:{type(e).__name__}: {e}")
+
+with diary_c2:
+    st.markdown("<div class='eyebrow'>30 天症狀 vs AQI 對照</div>", unsafe_allow_html=True)
+    _diary_aqi = tsdb.diary_with_aqi(user_city, days=30)
+
+    if _diary_aqi.empty:
+        st.info(
+            "尚無歷史紀錄。連續打卡 7-14 天後,這裡會出現「症狀分數 vs 平均 AQI」散點圖,"
+            "可看出你個人對空污的敏感度傾向。"
+        )
+    else:
+        # 散點圖:x = 該日平均 AQI、y = 症狀分數、bubble 大小 = 戶外分鐘
+        # 配色:症狀分數高用紅、低用綠;趨勢線顯示「相關係數 r」
+        import plotly.graph_objects as _go
+        import numpy as _np
+        _x = _diary_aqi["avg_aqi"].fillna(0).to_numpy()
+        _y = _diary_aqi["symptom_score"].to_numpy()
+        _size = (_diary_aqi["outdoor_min"].fillna(0).to_numpy() / 30).clip(min=8, max=40)
+        # 顏色映射:0→綠、5→紅
+        _colors = ["#00e676", "#7af1bb", "#ffd93d", "#ff8c42", "#ff4757", "#9b59ff"]
+        _point_colors = [_colors[int(s)] for s in _y]
+
+        _fig_d = _go.Figure()
+        _fig_d.add_trace(_go.Scatter(
+            x=_x, y=_y, mode="markers",
+            marker=dict(
+                size=_size, color=_point_colors, opacity=0.78,
+                line=dict(width=1, color="rgba(255,255,255,0.4)"),
+            ),
+            customdata=_np.stack([
+                _diary_aqi["date"].dt.strftime("%m/%d").to_numpy(),
+                _diary_aqi["outdoor_min"].fillna(0).to_numpy(),
+                _diary_aqi["note"].fillna("").to_numpy(),
+            ], axis=-1),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "AQI: %{x:.1f}<br>症狀: %{y}/5<br>"
+                "戶外: %{customdata[1]:.0f} 分鐘<br>"
+                "備註: %{customdata[2]}<extra></extra>"
+            ),
+            name="日誌",
+        ))
+        # 趨勢線(若有 >= 3 筆有 AQI 配對的資料)
+        _valid = _diary_aqi.dropna(subset=["avg_aqi"])
+        if len(_valid) >= 3:
+            _xv = _valid["avg_aqi"].to_numpy()
+            _yv = _valid["symptom_score"].to_numpy()
+            _m, _b = _np.polyfit(_xv, _yv, 1)
+            _r = float(_np.corrcoef(_xv, _yv)[0, 1])
+            _line_x = _np.array([_xv.min() - 5, _xv.max() + 5])
+            _fig_d.add_trace(_go.Scatter(
+                x=_line_x, y=_m * _line_x + _b, mode="lines",
+                line=dict(color="#ff8c42", width=2, dash="dot"),
+                name=f"趨勢線 r={_r:+.2f}",
+                hoverinfo="skip",
+            ))
+            _r_badge_color = "#ff4757" if _r > 0.3 else ("#ffd93d" if _r > 0 else "#00e676")
+            _r_message = (
+                f"相關係數 <b style='color:{_r_badge_color};'>r = {_r:+.2f}</b> · "
+                + ("✓ 你對空污較敏感(AQI 升高時症狀加重)" if _r > 0.3
+                   else "≈ 弱相關,可能其他因子主導" if abs(_r) <= 0.3
+                   else "↓ AQI 升高時症狀反而較輕,可能你都待室內")
+            )
+        else:
+            _r_message = "<span class='tiny muted'>累積至少 3 筆配對紀錄後,會自動算相關係數</span>"
+
+        _fig_d.update_layout(
+            height=320,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Inter, sans-serif", color="#e8eef7", size=11),
+            margin=dict(l=40, r=20, t=15, b=40),
+            xaxis=dict(gridcolor="rgba(0,217,255,0.08)", tickfont=dict(color="#8b95a8"), title="當日平均 AQI"),
+            yaxis=dict(
+                gridcolor="rgba(0,217,255,0.08)",
+                tickfont=dict(color="#8b95a8"),
+                title="症狀分數",
+                range=[-0.5, 5.5],
+                tickvals=[0, 1, 2, 3, 4, 5],
+            ),
+            showlegend=False,
+        )
+        st.plotly_chart(_fig_d, use_container_width=True,
+                        config={"displayModeBar": False}, key="diary_aqi_scatter")
+        st.markdown(
+            f"<div class='tiny muted' style='line-height:1.5;'>{_r_message}</div>",
+            unsafe_allow_html=True,
+        )
+        # 顯示資料表(最近 7 天)
+        with st.expander(f"📋 最近 30 天打卡紀錄({len(_diary_aqi)} 筆)"):
+            _display_df = _diary_aqi.copy()
+            _display_df["date"] = _display_df["date"].dt.strftime("%Y-%m-%d")
+            _display_df["avg_aqi"] = _display_df["avg_aqi"].round(1)
+            _display_df["peak_aqi"] = _display_df["peak_aqi"].round(1)
+            st.dataframe(
+                _display_df.rename(columns={
+                    "date": "日期",
+                    "symptom_score": "症狀",
+                    "outdoor_min": "戶外(分)",
+                    "avg_aqi": "AQI 均值",
+                    "peak_aqi": "AQI 峰值",
+                    "note": "備註",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
 
 # =============================================================================
 # SECTION · 個人訂閱 (PERSONAL SUBSCRIPTION) — 原 pages/3_個人訂閱.py 的內容
@@ -2825,7 +3184,7 @@ else:
 # 註冊成功後 OpenClaw 會定時觸發 analyst agent,把該城市的 AQI 摘要推送到指定頻道。
 # =============================================================================
 st.markdown("<a id='subscribe'></a>", unsafe_allow_html=True)
-st.markdown("<span class='eyebrow' style='margin-top:1.5rem; display:inline-block;'>SECTION · 04</span>", unsafe_allow_html=True)
+st.markdown("<span class='eyebrow' style='margin-top:1.5rem; display:inline-block;'>SECTION · 10</span>", unsafe_allow_html=True)
 st.markdown("<div class='section-title'>個人訂閱 · 把預警送到你的 Discord / LINE</div>", unsafe_allow_html=True)
 st.markdown(
     "<div class='section-sub'>填好下面表單，會自動產生一條 OpenClaw cron 指令。"
@@ -2834,6 +3193,23 @@ st.markdown(
 )
 
 with st.form("subscription_form"):
+    # ── 推送模式選擇(每日 Digest vs 即時預警) ──
+    # 「每日 Digest」= 每天固定時間(預設早 7 點)推一份完整摘要,包含 AQI 預測、
+    #                   個人健康建議、最佳出門時段。不論 AQI 高低都推。
+    # 「即時預警」= 只在 AQI > 閾值時推送單條警示。
+    sub_mode = st.radio(
+        "📨 推送模式",
+        options=["digest", "alert"],
+        format_func=lambda m: {
+            "digest": "📅 每日 Digest(完整摘要 · 每日固定時段)",
+            "alert":  "⚠ 即時預警(AQI 超過閾值才推)",
+        }[m],
+        index=0,  # 預設每日 Digest
+        horizontal=True,
+        key="sub_mode_radio",
+        help="Digest 適合一般使用者掌握全日節奏;Alert 適合敏感族群只在惡劣時被通知",
+    )
+
     sub_c1, sub_c2 = st.columns(2)
     with sub_c1:
         sub_city = st.selectbox(
@@ -2850,27 +3226,43 @@ with st.form("subscription_form"):
             format_func=lambda gid: next(f"{g['icon']} {g['label']}" for g in SENSITIVE_GROUPS if g["id"] == gid),
             key="sub_groups_select",
         )
-        sub_threshold = st.slider("⚠ AQI 觸發閾值（超過時推送）", 50, 200, 100, step=10, key="sub_threshold_slider")
+        # Alert 模式才需要閾值;Digest 模式 slider 顯示但用於「文字提醒」(超過時加 ⚠ emoji)
+        sub_threshold = st.slider(
+            "⚠ AQI 警示閾值",
+            50, 200, 100, step=10,
+            key="sub_threshold_slider",
+            help="Alert 模式:超過此值才推。Digest 模式:超過此值時推文加上 ⚠ 強調"
+        )
     with sub_c2:
         sub_channel = st.selectbox(
             "📡 推送頻道",
-            options=["discord", "telegram", "slack", "matrix", "（不推送，只在主畫面看）"],
+            options=["discord", "telegram", "slack", "matrix", "(不推送,只在主畫面看)"],
             key="sub_channel_select",
         )
         sub_target = st.text_input(
             "頻道 ID / 對話 ID",
-            placeholder="例如 channel:123456789012345678（Discord）或 telegram chat id",
-            help="Discord: 從頻道右鍵 → 複製 ID（要先開啟開發者模式）",
+            placeholder="例如 channel:123456789012345678 (Discord) 或 telegram chat id",
+            help="Discord: 從頻道右鍵 → 複製 ID (要先開啟開發者模式)",
             key="sub_target_input",
         )
-        sub_cron_spec = st.selectbox(
-            "推送頻率",
-            options=[
+        # 不同模式給不同頻率預設選項
+        if sub_mode == "digest":
+            _cron_options = [
+                ("每天早上 7 點(推薦)", "0 7 * * *"),
+                ("每天早上 8 點", "0 8 * * *"),
+                ("每天早上 7 點 + 晚上 6 點", "0 7,18 * * *"),
+                ("每週一 / 三 / 五早上 7 點", "0 7 * * 1,3,5"),
+            ]
+        else:
+            _cron_options = [
                 ("每小時整點", "0 * * * *"),
                 ("每 30 分鐘", "*/30 * * * *"),
-                ("每天早上 8 點", "0 8 * * *"),
+                ("每 2 小時", "0 */2 * * *"),
                 ("每天早上 8 點 + 晚上 6 點", "0 8,18 * * *"),
-            ],
+            ]
+        sub_cron_spec = st.selectbox(
+            "推送頻率",
+            options=_cron_options,
             format_func=lambda x: x[0],
             key="sub_cron_select",
         )
@@ -2879,8 +3271,8 @@ with st.form("subscription_form"):
 
 
 if sub_submit:
-    if sub_channel == "（不推送，只在主畫面看）":
-        st.info("✓ 已記住你的設定，回主畫面時可在「個人化推薦」section 看到對你的建議。")
+    if sub_channel == "(不推送,只在主畫面看)":
+        st.info("✓ 已記住你的設定,回主畫面時可在「個人化推薦」section 看到對你的建議。")
         st.session_state.user_city = sub_city
         st.session_state.user_conditions = sub_groups
     elif not sub_target.strip():
@@ -2890,16 +3282,30 @@ if sub_submit:
         sub_group_labels = [next(g["label"] for g in SENSITIVE_GROUPS if g["id"] == gid) for gid in sub_groups]
         sub_group_text = "、".join(sub_group_labels) if sub_group_labels else "一般族群"
 
-        sub_msg = (
-            f"請拉取台灣即時 AQI 並用 2 段繁體中文摘要：① {sub_city_name}（我的城市）目前 AQI、PM2.5 等指標；"
-            f"② 對 {sub_group_text} 的具體建議。"
-            f"若 {sub_city_name} AQI 低於 {sub_threshold}，明確說「目前空品良好，無需特別動作」一句帶過。"
-            f"必須引用實際抓到的數值。"
-        )
+        # 依模式組裝不同 LLM prompt — Digest 內容豐富、Alert 簡短
+        if sub_mode == "digest":
+            sub_msg = (
+                f"請拉取台灣即時 AQI + 未來 6 小時 CAMS 預測,產出**{sub_city_name}的每日 Digest** 摘要,"
+                f"用繁體中文 4 段:\n"
+                f"① 🌅 今日空品速覽:{sub_city_name} 當下 AQI + 主要污染物 + 與昨日對比\n"
+                f"② 🕐 6h 預測:今天空品何時最差、何時最佳(以小時為單位)\n"
+                f"③ 🏥 {sub_group_text}建議:依今日數值給具體行動清單(口罩 / 戶外時段 / 活動限制)\n"
+                f"④ ⚠ 注意事項:若任何時段 AQI > {sub_threshold},強調該時段需特別防護\n"
+                f"必須引用實際抓到的數值,不可編造其他城市。"
+            )
+            _name_suffix = f"digest-{sub_city}"
+        else:
+            sub_msg = (
+                f"請拉取台灣即時 AQI 並用 2 段繁體中文摘要:① {sub_city_name}(我的城市)目前 AQI、PM2.5 等指標;"
+                f"② 對 {sub_group_text} 的具體建議。"
+                f"若 {sub_city_name} AQI 低於 {sub_threshold},明確說「目前空品良好,無需特別動作」一句帶過。"
+                f"必須引用實際抓到的數值。"
+            )
+            _name_suffix = f"alert-{sub_city}-{sub_threshold}"
 
         sub_cron_cmd = [
             "openclaw", "cron", "add",
-            "--name", f"LobsterAQI-{sub_city}-{sub_threshold}",
+            "--name", f"LobsterAQI-{_name_suffix}",
             "--cron", sub_cron_spec[1],
             "--tz", "Asia/Taipei",
             "--session", "isolated",

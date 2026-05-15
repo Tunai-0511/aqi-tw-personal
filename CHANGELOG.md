@@ -12,6 +12,80 @@
 
 ---
 
+## [2026-05-15] 健康管理擴充:P1 四項 + 每日 Digest 推送 + 修 SECTION 編號 bug
+
+### Fixed
+- **SECTION 編號重複 bug**([app.py:16](app.py)、[app.py:2828](app.py))— 原本「污染物剖析」與「個人訂閱」都標 SECTION · 04。修正為:污染物 04 / 環境 05 / 資料源 06 / 健康 07 / 個人化 08 / **健康日誌 09(新)** / 個人訂閱 10。module docstring 同步更新。
+
+### Added
+
+#### 🔴 P1 #1 · 個人 AQI 預警閾值 ([app.py:142](app.py)、[app.py:1102](app.py)、[app.py:2090](app.py))
+- 新增 session_state `user_aqi_threshold`(預設 100)
+- sidebar slider 讓使用者設定 50-200 範圍
+- 主儀表板(SECTION · 02)在「時間軸 + 資料新鮮度」之下新增**個人 AQI 預警橫幅**:
+  - 突破閾值 → 紅色發光橫幅「⚠ 你的城市突破預警閾值」+ AQI 值 + 等級
+  - 未突破 → 淡色資訊條,顯示城市現況 + 預警閾值
+- 顯眼度依據:警告色 `#ff4757` + box-shadow + 左側 4px 邊框
+
+#### 🔴 P1 #4 · 歷史對比 highlight(整合於上述橫幅)
+- 用現有 `tsdb.city_period_avg(city, 168h)` 計算「本週 vs 上週」平均 AQI
+- 顯示徽章:↑ 比上週 +X% (橘) / ↓ 比上週 -Y% (綠) / ≈ 與上週相當(灰)
+- 即使未突破閾值也會顯示,讓使用者一眼看出趨勢
+
+#### 🔴 P1 #3 · 個人化敏感族群指數卡 ([app.py:2865](app.py))
+- SECTION · 08 個人化推薦底部新增「🩺 你的個人化健康指數」區塊
+- 對使用者勾選的**每個敏感族群**單獨計算:
+  - 容忍 AQI 門檻表:`elderly=60, children=70, asthma=50, cardiovascular=60, pregnant=50`
+  - safe_hours = max(0, 12 - max(0, AQI - limit) × 0.15)
+  - 4 級防護建議:✓ 正常 / 🧣 一般口罩 / 😷 N95 / 🚫 室內為主
+- 卡片網格:每個族群一張卡,顯示時數 + 防護建議,顏色依嚴重度
+- 未勾選任何族群 → 顯示 nudge 提示去 sidebar 設定
+
+#### 🔴 P1 #2 · 健康日誌(新 SECTION · 09)([app.py:3002](app.py)、[tsdb.py:354](tsdb.py))
+- **新 SQLite table `health_diary`**(tsdb.py):`(date, city_id, symptom_score, outdoor_min, note, created_at)` 複合 PK
+- **新 tsdb 函式**:
+  - `upsert_diary_entry()` — 同一天同城市可覆蓋
+  - `read_diary(city_id, days=30)` — 讀最近 N 天
+  - `diary_with_aqi(city_id, days=30)` — JOIN aqi_snapshots 帶入該日 cams_hourly 平均
+- **UI**:
+  - 左欄今日打卡表單:症狀分數 slider 0-5、戶外分鐘 number_input、備註 text_input
+  - 預載當日已有的紀錄(可修改而非每次重填)
+  - 右欄 30 天散點圖:x = 平均 AQI、y = 症狀分數、bubble 大小 = 戶外分鐘、顏色依症狀
+  - ≥ 3 筆配對資料時自動計算 Pearson r + 趨勢線 + 中文解讀("✓ 對空污較敏感" / "≈ 弱相關" 等)
+  - 摺疊區顯示原始打卡紀錄表
+
+#### 🟡 P2 #7 · 每日 Digest 推送(擴充 SECTION · 10 個人訂閱)([app.py:3186](app.py))
+- 個人訂閱表單新增 **推送模式** radio:
+  - **📅 每日 Digest**(預設) — 每天固定時段推完整摘要(空品速覽 + 6h 預測 + 族群建議 + 警示時段)
+  - **⚠ 即時預警** — 只在 AQI 突破閾值時推單條警示
+- 不同模式有不同 cron 頻率預設選項:
+  - Digest:每天 7 點 / 8 點 / 7+18 點 / 週一三五 7 點
+  - Alert:每小時 / 每 30 分鐘 / 每 2 小時 / 8+18 點
+- LLM prompt 動態組裝:Digest 模式產出 4 段結構化摘要(🌅 速覽 / 🕐 預測 / 🏥 建議 / ⚠ 注意);Alert 模式維持原本 2 段
+- Cron job 命名 prefix 區分:`LobsterAQI-digest-{city}` vs `LobsterAQI-alert-{city}-{threshold}`
+
+### Verification
+```powershell
+cd C:\Users\tunai\Downloads\aqi-tw-personal-main
+.venv\Scripts\python.exe -m py_compile app.py tsdb.py charts.py styles.py _city_detail.py data.py
+.venv\Scripts\Activate.ps1
+streamlit run app.py
+```
+功能驗證清單:
+- [ ] sidebar 「個人 AQI 預警」slider 出現,預設 100
+- [ ] 主儀表板:你的城市 AQI > 閾值 → 紅色橫幅;< 閾值 → 淡色資訊條;旁邊都有「比上週 ±X%」徽章
+- [ ] SECTION · 08 底部:勾選「老人 + 氣喘」→ 出現 2 張個人化指數卡顯示 safe_hours
+- [ ] SECTION · 09:今日打卡表單儲存後出現 success;隔天打卡可覆蓋
+- [ ] 連續打卡 3 天以上 → 右側出現散點圖 + Pearson r 解讀
+- [ ] SECTION · 10:切換 Digest 模式時,「推送頻率」選項變成每日 7 點等;產生的指令含 `--name LobsterAQI-digest-...`
+
+### 健康功能比例變化
+- 之前:1/9 真正個人化(SECTION · 08 個人化推薦)= **11%**
+- 現在:4 個顯眼個人化區塊(主畫面預警橫幅、SECTION · 08 個人化指數卡、SECTION · 09 健康日誌、SECTION · 10 Digest 模式)
+- 個人化 / 健康相關功能整體佔比 ≈ **30-35%**(視覺空間)
+
+---
+
 ## [2026-05-14] 大規模加上繁體中文詳細註解
 
 ### Documented
