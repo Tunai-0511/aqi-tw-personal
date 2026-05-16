@@ -12,6 +12,64 @@
 
 ---
 
+## [2026-05-16] 全面審查 — 過時註解 + README 重寫 + outdoor 死碼移除 + tsdb created_at
+
+### Fixed
+- **app.py module docstring**([app.py:11-22](app.py)) — SECTION 列表只有 01/02/03/09/10,補完 04-08(污染物剖析 / 環境關聯 / 官民比較 / 健康預警 / 個人化推薦)
+- **app.py 封面區 SECTION 順序註解**([app.py:1747-1749](app.py)) — 原寫「→ 02 → 03 ... 04 (訂閱)」完全錯誤(04 是污染物剖析,訂閱是 10)。改為正確的 01→10 順序
+- **app.py 封面 cover-subtitle HTML**([app.py:1782-1784](app.py)) — 仍寫「並由 Critic 自動審稿」,但 Critic 已於 3-agent 重構時移除。改為「由分析師整合 RAG 文獻,預警員給出敏感族群建議」
+- **app.py 城市深入 modal 註解**([app.py:2173-2176](app.py)) — 提及已刪的 `pages/1_城市深入.py for direct URL access`,改為歷史備註
+- **app.py SECTION · 09 標頭註解**([app.py:3003-3005](app.py)) — 原「SECTION · 09(舊編號)→ 移至下方;這裡先放健康日誌」語意混亂,簡化為直接的 SECTION · 09 標頭
+- **app.py SECTION · 07 預警卡 fallback**([app.py:2665-2672](app.py)) — 加入 `user_conditions` fallback:若使用者在 SECTION · 08 已選個人健康狀況但 SECTION · 07 沒按篩選按鈕,預設用 user_conditions 展開(避免一次列出全部 5 個族群造成資訊過載)
+- **tsdb.py `upsert_diary_entry` `created_at` 語意**([tsdb.py:489-528](tsdb.py)) — 原本 `INSERT OR REPLACE` 會把同一筆 (date, city_id) 整列覆寫,導致 `created_at` 變成「最後更新時間」而非「首次建立時間」。改為先 SELECT 既有 created_at,後續 upsert 沿用首次的值
+- **README.md 嚴重過時**(多處) — 全面重寫:
+  - 「為何只剩 3 個 agent」段落補上「scraper/ 與 critic/ 已於 2026-05-13 移除」
+  - 整段「Multi-page 結構」(原描述 pages/1_城市深入、2_城市並排比較、3_個人訂閱)改寫為「單頁 10 個 SECTION + 城市深入 modal + 浮動 AI 助理」
+  - 「scraper/ 與 critic/ 兩個資料夾保留下來」→「已於 2026-05-13 移除」
+  - 「進入 3_個人訂閱分頁」→「主畫面捲到 SECTION · 10 個人訂閱」(順便補上 Digest / Alert 兩種模式說明)
+  - 「9 大儀表板 section」→「10 個 SECTION」
+  - 架構圖底部 `subprocess → openclaw CLI` → `shell → scripts/setup_cron.bat → openclaw cron`
+  - **整個檔案結構圖重寫**:移除 `openclaw_client.py`、`pages/`、`openclaw_agents/{scraper, critic}/`(都不存在);新增 `tsdb.py`、`_city_detail.py`、`CHANGELOG.md`、`.gitignore`(實際存在但漏列)
+
+### Removed
+- **app.py SECTION · 08「未來 12 小時最佳外出時段」整欄** — `best_outdoor_hours()` 用 `np.random` 合成預測,並非真實資料,容易誤導使用者出門決策。與 `_city_detail.py:215-219` 同一理由(該檔已於 2026-05-13 移除)。具體:
+  - import `best_outdoor_hours`、`make_outdoor_bars`([app.py:55, 78](app.py))
+  - `with per2:` 整段卡片渲染(原 ~32 行)
+  - `per1, per2 = st.columns([2, 3])` 改為 `per1 = st.container()`,SECTION · 08 改為單欄全寬呈現
+- **app.py `show_chat` session_state 欄位**([app.py:186](app.py)) — 自標 `# 已不使用(legacy)`,grep 確認全檔無其他使用
+- **app.py `openclaw_agent_map` 中的 `scraper` / `critic` 鍵**([app.py:141-147](app.py)) — 與 3-agent 設計一致(同檔 L608、L670、L979 早已明示這兩個 agent 已刪)
+- **data.py `best_outdoor_hours` 整個函式**(~36 行) — app.py / _city_detail.py 都已不呼叫,連帶死碼
+- **data.py `_open_meteo_city_slice`**(~18 行) — 註解自標「目前已無呼叫者」
+- **data.py `fetch_lass_airbox = fetch_citizen_sensors` 別名**(3 行) — 註解自標「呼叫端遷移就刪」,app.py 確認已全用新名
+- **data.py module docstring 與 CleaningReport docstring** 對應地刪除 `best_outdoor_hours` / `fetch_lass_airbox` 條目
+- **charts.py `make_outdoor_bars`**(~28 行 + section 標頭)— 唯一呼叫者(app.py SECTION · 08)已移除
+
+### Verification
+```powershell
+cd C:\Users\tunai\Downloads\aqi-tw-personal-main
+.venv\Scripts\python.exe -m py_compile app.py tsdb.py charts.py styles.py _city_detail.py data.py
+.venv\Scripts\Activate.ps1
+streamlit run app.py
+```
+功能驗證 checklist:
+- [ ] py_compile 全綠
+- [ ] 主畫面跑 Pipeline 正常,SECTION · 01-10 全部渲染
+- [ ] **封面 cover-subtitle 不再提「Critic 自動審稿」**,改為「分析師 + 預警員」
+- [ ] **SECTION · 08「個人化推薦」只剩單欄(全寬)** — 沒有「未來 12 小時最佳外出時段」整欄
+- [ ] **SECTION · 07** 在 SECTION · 08 已勾「老人 + 氣喘」後,預警卡 expander 展開只顯示這兩族群(不是全部 5 個)
+- [ ] **SECTION · 09 健康日誌** 同一天打卡兩次,SQLite `SELECT created_at FROM health_diary WHERE date='YYYY-MM-DD'` 應為**第一次**寫入的時間
+- [ ] **城市深入 modal** 仍可開啟,內容正常
+- [ ] **README 結構圖** 與實際 `ls` 完全一致:沒有 `pages/`、`scraper/`、`critic/`、`openclaw_client.py`;有 `tsdb.py`、`_city_detail.py`、`CHANGELOG.md`
+
+### 資料夾命名審查結果
+全部 ✓ — 已透過讀 IDENTITY.md / SKILL.md / .bat 確認:
+- `openclaw_agents/{advisor, analyst, collector}` 三個子目錄都符合 3-agent 角色
+- `openclaw_skills/aqi-knowledge` 內容為 WHO/EPA/Lancet/MOENV 文獻索引
+- `scripts/{build_knowledge.bat, setup_cron.bat}` 名稱即功能
+- `docs/`、`.streamlit/` 為慣例命名,合理
+
+---
+
 ## [2026-05-15] 健康管理擴充:P1 四項 + 每日 Digest 推送 + 修 SECTION 編號 bug
 
 ### Fixed

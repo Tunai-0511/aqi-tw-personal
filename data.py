@@ -13,7 +13,6 @@
 2. **合成資料生成器 (Synthetic Generators)** — Mock fallback
    - `generate_current_snapshot()`:整批 20 城市的當下 AQI 模擬
    - `generate_time_series()`:24h 時序模擬
-   - `best_outdoor_hours()`:12h 戶外時段推薦
    - 這些函式只在 EPA API 失敗時被呼叫做 fallback,
      使用 `np.random` 加 `_diurnal_factor` (日夜峰值模型) 產生合理的假資料
 
@@ -288,26 +287,6 @@ def generate_time_series(hours_back: int = 24, now: datetime | None = None) -> p
     return pd.DataFrame(rows)
 
 
-def _open_meteo_city_slice(
-    city_id: str,
-    past_days: int = 1,
-    forecast_days: int = 1,
-) -> pd.DataFrame | None:
-    """單一城市的 Open-Meteo Air Quality 切片(目前已無呼叫者,留作工具函式)。
-
-    回傳欄位包含 timestamp / aqi / is_forecast — 配合圖表程式碼預期格式。
-    若該城市找不到或 API 無回應則回 None。
-    """
-    city = CITY_BY_ID.get(city_id)
-    if city is None:
-        return None
-    df = fetch_open_meteo_aq_batch([city], past_days=past_days, forecast_days=forecast_days)
-    if df is None or df.empty:
-        return None
-    df = df[df["city_id"] == city_id].dropna(subset=["aqi"]).sort_values("timestamp")
-    return df
-
-
 # ─── 輔助面板資料 (Auxiliary Panels) ──────────────────────────────────────
 
 
@@ -352,7 +331,7 @@ class CleaningReport:
     """清洗報告的不可變資料結構 — 整批 ETL 處理的統計結果。
 
     用途:UI 上「採集者」顯示「原始 X 筆 → 保留 Y 筆」的清洗摘要。
-    被 `fetch_citizen_sensors()` 與 `fetch_lass_airbox()` 等真實 ETL 函式使用。
+    被 `fetch_citizen_sensors()` 等真實 ETL 函式使用。
     """
     raw_records:    int                  # 從 API 拉到的原始筆數
     kept_records:   int                  # 經清洗後保留的筆數
@@ -399,44 +378,6 @@ OUTDOOR_ACTIVITIES = [
     {"id": "commute",  "label": "通勤",     "icon": "🚗"},
     {"id": "outdoor_work", "label": "戶外工作", "icon": "👷"},
 ]
-
-
-def best_outdoor_hours(city_id: str) -> pd.DataFrame:
-    """合成「未來 12 小時的最佳外出時段」推薦表。
-
-    ⚠ 此函式使用 `_seed_for + np.random` 產生合成預測,並非真實的 6h 預測。
-    保留只是因為 app.py 的個人化推薦 section 仍在引用。要替換成真實資料,
-    可改用 Open-Meteo CAMS 預測(`_open_meteo_city_slice(forecast_days=1)`)。
-
-    Returns
-    -------
-    pd.DataFrame
-        12 列(每小時一列),欄位:hour, aqi, level, color, score, recommend
-        recommend=True 標記在 score 最高的時點(其餘為 False)
-    """
-    now = datetime.now()
-    rows = []
-    # 對未來 12 小時的每一個整點各算一筆推薦分數
-    for h in range(12):
-        ts = now + timedelta(hours=h)
-        # 為「該城市 + 該未來小時」產生穩定種子,確保使用者多次 rerun 看到同一結果
-        rng = np.random.default_rng(_seed_for(city_id + "_out", ts))
-        diurnal = _diurnal_factor(ts.hour)
-        city = CITY_BY_ID[city_id]
-        aqi  = 55 * city["bias"] * diurnal + rng.normal(0, 8)
-        aqi  = float(max(15, min(220, aqi)))
-        rows.append({
-            "hour":  ts.strftime("%H:00"),
-            "aqi":   round(aqi, 1),
-            "level": aqi_to_level(aqi)["name"],
-            "color": aqi_to_level(aqi)["color"],
-            # 戶外指數 = 100 - AQI * 0.55,讓 AQI = 50 → score 72.5、AQI = 100 → score 45
-            "score": round(max(0, 100 - aqi * 0.55), 1),
-        })
-    df = pd.DataFrame(rows)
-    # recommend = 該列的 score 是不是 12 小時內的最大值(只有最佳時點為 True)
-    df["recommend"] = df["score"] == df["score"].max()
-    return df
 
 
 # ─── 3-agent Pipeline 設定 (Agent Pipeline Configuration) ──────────────────
@@ -1064,11 +1005,6 @@ def fetch_citizen_sensors() -> tuple[pd.DataFrame | None, "CleaningReport | None
         },
     )
     return pd.DataFrame(per_city), cleaning, f"{source_label}: 取得 {len(df)} 個有效感測器"
-
-
-# Backward-compat alias — existing callers (app.py) use the old name.
-# Delete this once those callers migrate.
-fetch_lass_airbox = fetch_citizen_sensors
 
 
 

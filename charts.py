@@ -613,40 +613,8 @@ def make_map(snapshot: pd.DataFrame, highlight: str | None = None) -> go.Figure:
     return fig
 
 
-# ─── 戶外時段長條圖(小工具) ─────────────────────────────────────────────
-
-
-def make_outdoor_bars(df: pd.DataFrame) -> go.Figure:
-    """未來 12 小時的「戶外指數」長條圖,推薦時段加白邊 + ★ 標示。
-
-    `score` 由 best_outdoor_hours() 算出(基本上是 100 - AQI*0.55),
-    `recommend` 是 boolean 標記該時段是否為「最佳推薦」。
-    """
-    # 推薦時段加橘色粗框 + 灰底;非推薦時段邊框寬度 0(不顯示)
-    colors = [
-        ORANGE if rec else "#3a4566"
-        for rec in df["recommend"]
-    ]
-    fig = go.Figure(go.Bar(
-        x=df["hour"], y=df["score"],
-        marker=dict(color=df["color"],
-                    line=dict(color=colors, width=[3 if r else 0 for r in df["recommend"]])),
-        text=[f"<b>★</b>" if r else "" for r in df["recommend"]],   # 推薦時段加 ★
-        textposition="outside",
-        textfont=dict(color=ORANGE, size=14),
-        customdata=np.stack([df["aqi"], df["level"]], axis=-1),
-        hovertemplate="<b>%{x}</b><br>戶外指數: %{y}<br>AQI: %{customdata[0]:.1f}<br>等級: %{customdata[1]}<extra></extra>",
-    ))
-    fig.update_layout(**_base_layout(
-        height=260,
-        yaxis_title="戶外指數",
-        showlegend=False,
-        margin=dict(l=40, r=20, t=20, b=40),
-    ))
-    return fig
-
-
-# NOTE: 早期版本還有 `make_satellite_panel`(合成的 NASA TROPOMI 衛星圖),
-# 但要拉真實的 Sentinel-5P 資料需要 Google Earth Engine / Copernicus Data Space
-# 帳號與額外設定,作為個人專案 demo 太複雜,因此整個移除。其他部分都改用
-# 真實 API(EPA / Open-Meteo / LASS) — 見 data.py。
+# NOTE: 早期版本還有 `make_outdoor_bars` 與 `make_satellite_panel`,
+# 已分別於 2026-05-16(隨 SECTION · 08 outdoor 區塊移除)與更早期移除。
+# 真實的 Sentinel-5P / CAMS 衛星資料需要 Google Earth Engine / Copernicus
+# 帳號,作為個人專案 demo 太複雜。其他部分都改用真實 API(EPA / Open-Meteo
+# / LASS) — 見 data.py。
