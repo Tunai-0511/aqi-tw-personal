@@ -11,8 +11,11 @@
   - **SECTION · 01 三隻 agent 協作視覺化**:像素風辦公室 + agent 群組聊天室
   - **SECTION · 02 即時 AQI 主儀表板**:時間軸 + 聚焦城市 + 排名 + 地圖 + 散點 + 新鮮度
   - **SECTION · 03 24 小時趨勢**:多城市 AQI 趨勢線
-  - 熱力圖 + 雷達圖 + 風玫瑰 + 民間 vs 官方比較 + 過去 7 天紀錄板
-  - **個人化推薦區**:依使用者敏感族群給建議
+  - **SECTION · 04 污染物剖析**:熱力圖 + 雷達圖 + 堆疊組成 + 散點
+  - **SECTION · 05 環境關聯**:濕度 vs PM2.5、風玫瑰
+  - **SECTION · 06 官方 vs 民間**:EPA 測站對比 CivilIoT / LASS-net 微型感測器
+  - **SECTION · 07 健康預警**:每個城市一張預警卡,點選敏感族群篩選建議
+  - **SECTION · 08 個人化推薦**:依使用者城市 / 健康狀況給針對性指數卡
   - **SECTION · 09 健康日誌**:每日打卡 + 症狀 vs AQI 相關性散點
   - **SECTION · 10 個人訂閱**:產生 OpenClaw cron 指令的表單(含每日 Digest 模式)
   - **右下角浮動 AI 助理**:LINE 風格聊天視窗,使用 RAG + LLM 回答問題
@@ -52,7 +55,6 @@ from data import (
     AGENTS, AQI_LEVELS, CITIES, CITY_BY_ID, GROUP_ADVICE,
     LLM_PROVIDERS, OUTDOOR_ACTIVITIES, POLLUTANTS, SENSITIVE_GROUPS,
     aqi_to_level,
-    best_outdoor_hours,
     call_llm_api,
     fetch_citizen_sensors,
     fetch_open_meteo_aq_batch,
@@ -75,7 +77,6 @@ from charts import (
     make_heatmap,
     make_humidity_scatter,
     make_map,
-    make_outdoor_bars,
     make_pm25_aqi_scatter,
     make_pollutant_radar,
     make_stacked_composition,
@@ -135,14 +136,12 @@ def init_state():
         "llm_model":     "",                 # 空字串會 fallback 到 LLM_PROVIDERS 的 default_model
         "llm_base_url":  "",                 # 空字串會用 provider 預設 endpoint
 
-        # ── OpenClaw 相容對應表 ──
-        # 早期 5-agent 設計的相容 stub,讓訂閱頁與個人化推薦的舊邏輯不會 KeyError。
-        # 實際 Pipeline 只用 collector / analyst / advisor 三個。
+        # ── OpenClaw 對應表 ──
+        # 3-agent 設計的 id 對應,給訂閱頁與個人化推薦使用。
+        # (早期 5-agent 設計的 scraper / critic 已於 2026-05-13 移除)
         "openclaw_agent_map":     {
             "collector": "collector",
-            "scraper":   "scraper",
             "analyst":   "analyst",
-            "critic":    "critic",
             "advisor":   "advisor",
         },
 
@@ -183,7 +182,6 @@ def init_state():
         "user_activity":   "running",        # 個人化推薦的關心活動類型
         # 個人 AQI 預警閾值(P1 #1):主畫面會 highlight「你的城市 AQI > 這個門檻」
         "user_aqi_threshold": 100,           # 預設 100(對敏感族群不健康的界線)
-        "show_chat":       False,            # 已不使用(legacy)
         "chat_expanded":   False,            # 浮動聊天面板是展開還是收起(FAB)
         "selected_hour":   None,             # 時間軸 slider 位置(None = 當前快照)
     }
@@ -1744,7 +1742,9 @@ else:
 # =============================================================================
 # 封面顯示:LobsterAQI 品牌標題 + 副標 + 3 個 agent 功能介紹 + 狀態指示
 # 大型「啟動 Pipeline」按鈕在這裡,使用者第一次進入時必須點它才會跑 Pipeline。
-# 封面下方依序是 SECTION · 01 (Agent 劇場) → 02 (主儀表板) → 03 (趨勢) ... 04 (訂閱)
+# 封面下方依序是 SECTION · 01 (Agent 劇場) → 02 (主儀表板) → 03 (24h 趨勢)
+# → 04 (污染物剖析) → 05 (環境關聯) → 06 (官方 vs 民間) → 07 (健康預警)
+# → 08 (個人化推薦) → 09 (健康日誌) → 10 (個人訂閱)
 # =============================================================================
 _llm_prov_name = LLM_PROVIDERS[st.session_state.llm_provider]["name"]
 _has_llm_key   = bool(st.session_state.llm_key.strip())
@@ -1778,8 +1778,8 @@ st.markdown(
       <div class='cover-eyebrow'>TAIWAN AIR QUALITY · MULTI-AGENT SYSTEM</div>
       <div class='cover-title'>LobsterAQI 監控平台</div>
       <div class='cover-subtitle'>
-        三個 agent 接力即時採集 EPA + 民生公共物聯網資料，呼叫 LLM 生成分析報告與健康建議，
-        並由 Critic 自動審稿。按下啟動鍵，整套儀表板就會在你面前展開。
+        三個 agent 接力即時採集 EPA + 民生公共物聯網資料，由分析師整合 RAG 文獻產出風險研判，
+        預警員給出敏感族群建議。按下啟動鍵，整套儀表板就會在你面前展開。
       </div>
       <div class='cover-features'>
         <div class='cover-feature'><span class='ico'>📡</span> 採集者 · EPA + 民生公共物聯網</div>
@@ -2172,8 +2172,8 @@ with d1:
 
     # Open the city deep-dive as a modal so the user keeps their scroll
     # position on the main dashboard instead of being teleported to another
-    # page. The same content is also reachable as a standalone page via
-    # pages/1_城市深入.py for direct URL access (e.g. ?city=taipei).
+    # page. (歷史:原 pages/1_城市深入.py 已於 2026-05-13 移除,共用渲染
+    # 邏輯整段搬到此 modal,走 _city_detail.py。)
     @st.dialog("🦞 城市深入", width="large")
     def _city_detail_modal(city_id: str):
         from _city_detail import render_city_detail
@@ -2662,7 +2662,14 @@ for chunk_start in range(0, len(sorted_snap), 3):
         with cols[i]:
             lvl = aqi_to_level(row["aqi"])
             # Build group advice
-            groups_to_show = selected_groups if selected_groups else [g["id"] for g in SENSITIVE_GROUPS]
+            # 優先用 SECTION · 07 的篩選按鈕(selected_groups);若使用者沒按
+            # 任何按鈕,fallback 用 SECTION · 08 的個人健康狀況(user_conditions);
+            # 兩者都空才預設展開全部族群。
+            groups_to_show = (
+                selected_groups
+                or st.session_state.get("user_conditions") or
+                [g["id"] for g in SENSITIVE_GROUPS]
+            )
             advice_lines = ""
             for gid in groups_to_show:
                 g = next(g for g in SENSITIVE_GROUPS if g["id"] == gid)
@@ -2705,21 +2712,24 @@ st.markdown("<br>", unsafe_allow_html=True)
 # =============================================================================
 # 使用者選擇:我的城市 / 敏感族群 / 關心活動 → 系統給出:
 #   - 該城市目前的 AQI + 該族群的建議
-#   - 該活動的「最佳時段」(若 EPA 預測可用)
 #   - 過去 7 天該城市的 AQI 趨勢圖(從本機 SQLite 取)
 #   - 與「上週同期」的對比(高 / 低 X%)
+#   - 對勾選敏感族群的「safe_hours / 防護建議」個人化健康指數卡
 # 不需要 LLM 也能跑,但有 LLM 時會額外給個人化文字建議。
+# (2026-05-16:原右欄「未來 12 小時最佳外出時段」已移除,因為
+#  `best_outdoor_hours()` 用 np.random 合成資料,推薦時段並非真實預測)
 # =============================================================================
 st.markdown("<a id='perso'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 08</span>", unsafe_allow_html=True)
 st.markdown("<div class='section-title'>個人化推薦</div>", unsafe_allow_html=True)
 st.markdown(
     "<div class='section-sub'>告訴系統你住哪、做什麼、有什麼狀況 — "
-    "它會告訴你今天幾點出門最好。</div>",
+    "它會給你針對性的健康指數卡與 7 天趨勢。</div>",
     unsafe_allow_html=True,
 )
 
-per1, per2 = st.columns([2, 3])
+# 改為單欄全寬呈現(原 per1 / per2 雙欄已合併)
+per1 = st.container()
 
 with per1:
     st.markdown("<div class='eyebrow'>個人設定</div>", unsafe_allow_html=True)
@@ -2797,39 +2807,6 @@ with per1:
           </div>
           <div style='margin-top:0.6rem; padding:0.5rem 0.7rem; background:rgba(0,0,0,0.25); border-radius:8px; font-size:0.85rem; line-height:1.5;'>
             {aqi_to_level(my_row['aqi'])['advice']}
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with per2:
-    st.markdown("<div class='eyebrow'>未來 12 小時最佳外出時段</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='tiny muted' style='margin-bottom:0.5rem;'>"
-        f"根據 <b style='color:#00d9ff;'>{CITY_BY_ID[user_city]['name']}</b> 的預測 AQI 推薦 · "
-        f"★ 標記最佳時段</div>",
-        unsafe_allow_html=True,
-    )
-    outdoor_df = best_outdoor_hours(user_city)
-    st.plotly_chart(make_outdoor_bars(outdoor_df), width='stretch', key="outdoor",
-                     config={"displayModeBar": False})
-
-    best_hour = outdoor_df[outdoor_df["recommend"]].iloc[0]
-    activity_info = next(a for a in OUTDOOR_ACTIVITIES if a["id"] == st.session_state.user_activity)
-    st.markdown(
-        f"""
-        <div class='glass-card' style='border-color:#00e676; background:linear-gradient(135deg, rgba(0,230,118,0.10), rgba(15,24,48,0.5));'>
-          <div style='display:flex; align-items:center; gap:1rem;'>
-            <div style='font-size:2rem;'>{activity_info["icon"]}</div>
-            <div style='flex:1;'>
-              <div class='eyebrow' style='color:#00e676;'>建議 {activity_info["label"]} 時段</div>
-              <div style='font-size:1.4rem; font-weight:800;'>
-                今天 <span style='color:#00e676; font-family:JetBrains Mono;'>{best_hour['hour']}</span>
-                · 預測 AQI <span style='color:#00d9ff; font-family:JetBrains Mono;'>{best_hour['aqi']:.0f}</span>
-              </div>
-              <div class='tiny muted' style='margin-top:0.3rem;'>戶外指數 {best_hour['score']}/100 · {best_hour['level']}</div>
-            </div>
           </div>
         </div>
         """,
@@ -3001,8 +2978,7 @@ else:
     )
 
 # =============================================================================
-# SECTION · 09(舊編號)→ 移至下方;這裡先放健康日誌
-# 健康日誌 (HEALTH DIARY) — P1 #2
+# SECTION · 09 · 健康日誌 (HEALTH DIARY) — P1 #2 新功能
 # =============================================================================
 # 使用者每天打卡記錄症狀嚴重度 / 戶外時數,持久化在本機 SQLite。
 # 累積後可繪製「症狀分數 vs 當日平均 AQI」散點圖,找出個人對空污的敏感度。
