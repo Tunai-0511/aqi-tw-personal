@@ -1541,7 +1541,13 @@ def call_llm_api(
                 return None
             data = r.json()
             try:
-                return clean_llm_output(data["content"][0]["text"])
+                text = data["content"][0]["text"]
+                # 偵測 max_tokens 截斷 — 之前使用者多次反映「話講一半就停」,
+                # 根因就是達上限後 LLM 在句子中間切斷,而我們沒告知使用者。
+                # 現在明確附上提示,使用者就知道要追問或調高上限。
+                if data.get("stop_reason") == "max_tokens":
+                    text += "\n\n_(⚠ 回應達 max_tokens 上限,可能未完整 — 可追問細節或調高設定)_"
+                return clean_llm_output(text)
             except (KeyError, IndexError, TypeError) as e:
                 LAST_LLM_ERROR = f"Anthropic 回應解析失敗（{type(e).__name__}）：{str(data)[:200]}"
                 return None
@@ -1575,7 +1581,13 @@ def call_llm_api(
                 return None
             data = r.json()
             try:
-                return clean_llm_output(data["choices"][0]["message"]["content"])
+                choice = data["choices"][0]
+                text = choice["message"]["content"]
+                # OpenAI 格式的截斷標記為 finish_reason='length'(同樣涵蓋 Gemini /
+                # MiniMax / OpenAI / custom 走這條路徑的 provider)。同樣附上提示。
+                if choice.get("finish_reason") == "length":
+                    text += "\n\n_(⚠ 回應達 max_tokens 上限,可能未完整 — 可追問細節或調高設定)_"
+                return clean_llm_output(text)
             except (KeyError, IndexError, TypeError) as e:
                 LAST_LLM_ERROR = f"{provider} 回應解析失敗（{type(e).__name__}）：{str(data)[:200]}"
                 return None

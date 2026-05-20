@@ -12,6 +12,30 @@
 
 ---
 
+## [2026-05-15 後續] AI 助理修兩個 bug:輸入框釘底 + 回應截斷偵測
+
+### Fixed
+- **聊天輸入框未常駐底部**([styles.py:1016-1052](styles.py)) — 之前用 `margin-top: auto + flex-shrink: 0 + order: 99` 的方案理論上可行,但實測無效。根因是 Streamlit 在 `.st-key-floating_chat` 與 `[data-testid="stChatInput"]` 之間插了 `stVerticalBlockBorderWrapper` 等包裝元素,flex 屬性無法跨層 propagate。**改用 `position: absolute` 直接以 panel 為定位錨點**(panel 已是 `position: fixed`,提供 positioning context),輸入框 `bottom: 14px / left: 16px / right: 16px` 永遠釘底。chat_history 加 `padding-bottom: 64px` 預留輸入框空間。
+- **LLM 回應「話講一半就停」**([app.py:1683-1693](app.py)、[data.py:1546-1555](data.py)、[data.py:1583-1596](data.py)) — 兩個原因疊加:
+  - **a) max_tokens 上限太低** — 原 `max_tokens=4096`,Claude 達上限後直接截斷在句子中間,而舊 `call_llm_api` **未偵測 stop_reason='max_tokens'**,使用者完全看不出是被截掉的。
+  - **b) timeout 太短** — 原 `timeout=25`,長回應的生成可能需要 30-40s,容易在中途逾時返回 None(顯示 fallback 摘要)。
+  - **修法**:聊天 max_tokens → 8192、timeout → 60s;同時在 `call_llm_api` 偵測 Anthropic `stop_reason=='max_tokens'` 與 OpenAI 格式 `finish_reason=='length'`,截斷時自動附加「⚠ 回應達 max_tokens 上限,可能未完整 — 可追問細節或調高設定」標示。
+
+### Verification
+```powershell
+cd C:\Users\tunai\Downloads\aqi-tw-personal-main
+.venv\Scripts\python.exe -m py_compile app.py styles.py data.py tsdb.py charts.py _city_detail.py
+streamlit run app.py
+```
+功能測試清單:
+- [ ] 右下角開啟聊天面板 → 輸入框永遠在最底(對話有 0、1、5、20 則訊息都測試)
+- [ ] 拉長視窗 / 縮小視窗 → 輸入框跟著 panel 底邊
+- [ ] 問一個複雜問題(如「5 類敏感族群的詳細運動建議」)→ 回應完整,即使超過原 4096 token 也不截斷
+- [ ] 若不幸還是達到 8192 上限 → 訊息末尾應有「⚠ 回應達 max_tokens 上限」提示
+- [ ] 連續發 5 則訊息 → input 永遠可用、永遠在底
+
+---
+
 ## [2026-05-15] 健康管理擴充:P1 四項 + 每日 Digest 推送 + 修 SECTION 編號 bug
 
 ### Fixed
