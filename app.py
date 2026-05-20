@@ -3581,8 +3581,13 @@ if sub_submit:
         st.info("✓ 已記住你的設定,回主畫面時可在「個人化推薦」section 看到對你的建議。")
         st.session_state.user_city = sub_city
         st.session_state.user_conditions = sub_groups
+        # 清除之前產生的指令
+        st.session_state.pop("_sub_cmd", None)
+        st.session_state.pop("_sub_cmd_str", None)
     elif not sub_target.strip():
         st.error("請填入頻道 ID")
+        st.session_state.pop("_sub_cmd", None)
+        st.session_state.pop("_sub_cmd_str", None)
     else:
         sub_city_name = CITY_BY_ID[sub_city]["name"]
         sub_group_labels = [next(g["label"] for g in SENSITIVE_GROUPS if g["id"] == gid) for gid in sub_groups]
@@ -3609,7 +3614,7 @@ if sub_submit:
             )
             _name_suffix = f"alert-{sub_city}-{sub_threshold}"
 
-        sub_cron_cmd = [
+        _sub_cron_cmd = [
             "openclaw", "cron", "add",
             "--name", f"LobsterAQI-{_name_suffix}",
             "--cron", sub_cron_spec[1],
@@ -3621,29 +3626,34 @@ if sub_submit:
             "--channel", sub_channel,
             "--to", sub_target.strip(),
         ]
-        sub_cmd_str = " ".join(shlex.quote(p) for p in sub_cron_cmd)
+        st.session_state["_sub_cmd"] = _sub_cron_cmd
+        st.session_state["_sub_cmd_str"] = " ".join(shlex.quote(p) for p in _sub_cron_cmd)
 
-        st.markdown("<div class='eyebrow' style='margin-top:1rem;'>產生的指令</div>", unsafe_allow_html=True)
-        st.code(sub_cmd_str, language="bash")
+# ── 指令顯示與按鈕區塊:脫離 form submit 狀態,永遠讀 session_state ────────────
+if st.session_state.get("_sub_cmd_str"):
+    st.markdown("<div class='eyebrow' style='margin-top:1rem;'>產生的指令</div>", unsafe_allow_html=True)
+    st.code(st.session_state["_sub_cmd_str"], language="bash")
 
-        sub_cA, sub_cB = st.columns(2)
-        with sub_cA:
-            if st.button("📋 我自己複製到 terminal 跑", use_container_width=True, key="sub_copy_btn"):
-                st.info("好，請手動跑上方那行指令。完成後 openclaw cron list 應看得到。")
-        with sub_cB:
-            if st.button("⚡ 直接幫我註冊（subprocess）", type="primary", use_container_width=True, key="sub_register_btn"):
+    sub_cA, sub_cB = st.columns(2)
+    with sub_cA:
+        if st.button("📋 我自己複製到 terminal 跑", use_container_width=True, key="sub_copy_btn"):
+            st.info("好，請手動跑上方那行指令。完成後 `openclaw cron list` 應看得到。")
+    with sub_cB:
+        if st.button("⚡ 直接幫我註冊（subprocess）", use_container_width=True, key="sub_register_btn"):
+            _cmd = st.session_state.get("_sub_cmd", [])
+            if _cmd:
                 try:
+                    sub_cmd_final = subprocess.list2cmdline(_cmd)
                     sub_result = subprocess.run(
-                        subprocess.list2cmdline(sub_cron_cmd),
+                        sub_cmd_final,
                         shell=True, capture_output=True, text=True, timeout=30,
                         encoding="utf-8", errors="replace",
                     )
                     if sub_result.returncode == 0:
-                        st.success("✓ Cron job 已註冊。執行 `openclaw cron list` 可確認。")
-                        st.code(sub_result.stdout[-500:] or "(無輸出)")
+                        st.success("✓ Cron job 已註冊。")
                     else:
-                        st.error(f"註冊失敗（returncode={sub_result.returncode}）")
-                        st.code((sub_result.stdout or "") + "\n" + (sub_result.stderr or ""))
+                        st.error(f"失敗 (rc={sub_result.returncode})")
+                        st.code((sub_result.stdout or "(empty)") + "\n---\n" + (sub_result.stderr or "(empty)"))
                 except Exception as e:
                     st.error(f"執行錯誤：{type(e).__name__}: {e}")
 

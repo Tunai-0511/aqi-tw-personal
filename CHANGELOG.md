@@ -12,6 +12,17 @@
 
 ---
 
+## [2026-05-21] 個人訂閱按鈕重構:將「產生指令」Form 與「直接註冊」按鈕脫鉤 (by Einosensokami)
+
+### Fixed
+- **app.py SECTION · 10「直接幫我註冊」按鈕無回應**([app.py:3579-3663](app.py)) — 原設計把「產生指令」form submit 與「直接幫我註冊」按鈕寫在同一個 `if sub_submit:` 區塊，導致按鈕 callback 在 form submit 的同一 script run 內被評估，Streamlit 認為 button return value 在 form context 內無效而不執行後續邏輯。修復：
+  - form submit 只負責將命令寫入 `session_state["_sub_cmd"]`，不直接渲染 UI
+  - 指令顯示 + 兩個 action button 移到獨立的 `if st.session_state.get("_sub_cmd_str"):` 區塊，完全脫離 form submit 上下文
+  - 從此按鈕點擊可正確觸發 `subprocess.run(openclaw cron add ...)` 並顯示成功/失敗訊息
+- **按鈕寬度一致** — 同步拿掉 `type="primary"` 使兩個按鈕視覺一致。
+
+---
+
 ## [2026-05-20] Bug 修復:button width 參數 + 健康日誌 avg_aqi 數值型別 (by Einosensokami)
 
 ### Fixed
