@@ -507,17 +507,29 @@ def upsert_diary_entry(
         戶外時數(分鐘),clip 在 [0, 1440]
     note : str
         自由文字備註
+
+    Notes
+    -----
+    `created_at` 保留「首次建立的時間」 — 後續同一天同城市再次 upsert 時,
+    我們會先 SELECT 既有記錄的 created_at 並繼續使用,避免欄位語意被
+    INSERT OR REPLACE 改寫成「最後一次更新時間」。
     """
     _init_health_diary()
     symptom_score = max(0, min(5, int(symptom_score)))
     outdoor_min   = max(0, min(1440, int(outdoor_min)))
     now_iso = datetime.now().isoformat(timespec="seconds")
     with sqlite3.connect(DB_PATH) as c:
+        # 保留首次 created_at — INSERT OR REPLACE 會整列覆寫,所以要先讀回
+        existing = c.execute(
+            "SELECT created_at FROM health_diary WHERE date=? AND city_id=?",
+            (date, city_id),
+        ).fetchone()
+        first_created = existing[0] if existing else now_iso
         c.execute(
             "INSERT OR REPLACE INTO health_diary "
             "(date, city_id, symptom_score, outdoor_min, note, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (date, city_id, symptom_score, outdoor_min, note or "", now_iso),
+            (date, city_id, symptom_score, outdoor_min, note or "", first_created),
         )
 
 

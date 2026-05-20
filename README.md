@@ -76,26 +76,33 @@ Sidebar 「Discord 推送」貼一條 channel webhook URL（頻道設定 → 整
 
 **為何只剩 3 個？**
 
-初版設計過於追求「multi-agent」概念塞了 5 個 agent（採集者、爬蟲員、分析師、品管員、預警員），但其中 3 個的 LLM 呼叫只是「對剛跑完的 Python 程式碼寫一句註解」，沒有實際進入下游分析。Critic 的 0-100 分也沒實際 gate 任何重試。3-agent 版本把 ETL 集中在採集者（純資料處理、無 LLM），讓 LLM 只用在它擅長的「分析」與「個人化建議」兩個環節。
+初版設計過於追求「multi-agent」概念塞了 5 個 agent（採集者、爬蟲員、分析師、品管員 Critic、預警員），但其中 3 個的 LLM 呼叫只是「對剛跑完的 Python 程式碼寫一句註解」，沒有實際進入下游分析。Critic 的 0-100 分也沒實際 gate 任何重試。3-agent 重構把 ETL 集中在採集者（純資料處理、無 LLM），讓 LLM 只用在它擅長的「分析」與「個人化建議」兩個環節。`scraper/` 與 `critic/` 兩個 agent 工作區也於 2026-05-13 一併刪除。
 
 `analyst` 與 `advisor` 用**同一個** LLM 提供商（你在 sidebar 選的那個）。Anthropic / Google Gemini / MiniMax / OpenAI / 自訂都可以。
 
 ---
 
-## 📑 Multi-page 結構
+## 📑 單頁結構（10 個 SECTION）
 
-左側 sidebar 自動顯示這 4 頁：
+LobsterAQI 是 Streamlit 單頁應用 — 從封面捲到底,依序為 10 個 SECTION:
 
-| 分頁 | 內容 |
-|------|------|
-| 主畫面 | 封面 + 龍蝦劇場 + 群組聊天室 + 主儀表板 |
-| 1_城市深入 | 任一城市的詳細頁（6 種污染物 24h、6h 預測、最佳外出時段、健康建議）|
-| 2_城市並排比較 | 2-3 城市同時比較（表格、雷達、24h 趨勢、AI 比較分析）|
-| 3_個人訂閱 | 表單產生 OpenClaw cron 指令，推播到 Discord / Telegram |
+| SECTION | 內容 |
+|---------|------|
+| 封面 | LobsterAQI 品牌標題 + 「啟動三代理人 Pipeline」按鈕 + 狀態指示 |
+| 01 三隻 agent 協作 | 像素風辦公室 + 3 個 agent 群組聊天室 |
+| 02 即時 AQI 主儀表板 | 時間軸 scrubber + 聚焦城市 + 排名 + 地圖 + 散點 + 新鮮度燈號 |
+| 03 24 小時趨勢 | 多城市 AQI 趨勢線 |
+| 04 污染物剖析 | 熱力圖 + 雷達圖 + 堆疊組成 + PM2.5 vs AQI 散點 |
+| 05 環境關聯 | 濕度 vs PM2.5、風玫瑰 |
+| 06 官方 vs 民間 | EPA 測站對比 CivilIoT / LASS-net 微型感測器 |
+| 07 健康預警 | 每個城市一張預警卡,點敏感族群篩選建議 |
+| 08 個人化推薦 | 你的常駐城市 + 健康狀況 → 個人化健康指數卡 + 7 天趨勢 |
+| 09 健康日誌 | 每日打卡(症狀分數 + 戶外時數)+ 症狀 vs AQI 相關性散點 |
+| 10 個人訂閱 | 表單產生 OpenClaw cron 指令,推播到 Discord(支援每日 Digest 模式)|
 
-主畫面點「🔍 查看 [city] 詳細」自動跳到城市深入頁。
+主儀表板上方有**時間軸 scrubber** — 拖動可看過去 24h 任一時點的快照。主畫面點「🔍 查看 [city] 詳細」會開啟**城市深入 modal**(無頁面切換,捲動位置保留),內容由 `_city_detail.py` 共用。
 
-主儀表板上方有**時間軸 scrubber** — 拖動可看過去 24h 任一時點的快照。
+右下角有**浮動 AI 助理 FAB**(LINE 風格聊天視窗),整合 RAG + LLM 回答空品相關問題。
 
 ---
 
@@ -136,7 +143,8 @@ done
 ```
 
 每個 agent 的 `openclaw_agents/<id>/SOUL.md` + `IDENTITY.md` 已預先客製。
-（`scraper/` 與 `critic/` 兩個資料夾保留下來但目前不啟用 — 它們是 5-agent 設計時的舊作。）
+（早期 5-agent 設計的 `scraper/` 與 `critic/` 兩個工作區已於 2026-05-13 移除,
+3-agent 重構後不再使用。）
 
 ### C. 排程推送 Discord（每小時 AQI 摘要）
 
@@ -181,7 +189,10 @@ openclaw cron run TW-AQI-hourly       # 立即跑一次測試
 
 ### F. 個人閾值訂閱
 
-進入「3_個人訂閱」分頁 → 填表單 → 自動產生 `openclaw cron add` 指令。例：「我住高雄、氣喘、AQI > 80 時推到 Discord」→ 每小時自動跑 → 條件成立才送。
+主畫面捲到底部 SECTION · 10「個人訂閱」→ 填表單 → 自動產生 `openclaw cron add` 指令。例：「我住高雄、氣喘、AQI > 80 時推到 Discord」→ 每小時自動跑 → 條件成立才送。支援兩種推送模式:
+
+- **📅 每日 Digest** — 每天固定時段推完整摘要(空品速覽 + 預測 + 族群建議 + 警示時段)
+- **⚠ 即時預警** — 只在 AQI 突破閾值時推單條警示
 
 ### G. 正式 RAG 知識庫
 
@@ -213,9 +224,9 @@ openclaw memory reindex --skill aqi-knowledge
                          ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  LobsterAQI Streamlit                                         │
-│  - 封面 / 劇場 / 9 大儀表板 section                            │
-│  - 群組聊天室 + 右下角 AI 助理 + 城市深入/比較 page             │
-│  - 時間軸 scrubber                                            │
+│  - 封面 / 劇場 / 10 個 SECTION(02-10 主要儀表板區)             │
+│  - 群組聊天室 + 右下角 AI 助理 + 城市深入 modal                 │
+│  - 時間軸 scrubber + 健康日誌 + 個人訂閱表單                    │
 └──┬───────────────────────────────────────────────────────────┘
    │
    ├──── HTTP ────► data.moenv.gov.tw           (環境部 EPA 即時 aqx_p_432 + 歷史 aqx_p_488)
@@ -227,10 +238,11 @@ openclaw memory reindex --skill aqi-knowledge
    │                 (sidebar 選的 LLM 提供商；in-app 即時回應)
    ├──── HTTP ────► discord.com/api/webhooks/…  (選填；Pipeline 完成推播摘要)
    │
-   ├──── SQLite ──► ./lobster_aqi.sqlite        (本機時序快取；跨重啟保留)
-   └──── subprocess ────► openclaw CLI          (選填；用於 cron 推送、MEMORY 寫入)
-                          (OpenClaw gateway 跑在 localhost:18789，
-                           處理排程、Discord/LINE 路由；in-app LLM 不走它)
+   ├──── SQLite ──► ./lobster_aqi.sqlite        (本機時序快取 + 健康日誌；跨重啟保留)
+   └──── shell ──► scripts/setup_cron.bat ──► openclaw cron
+                          (選填；用於排程推送、MEMORY 寫入。
+                           OpenClaw gateway 跑在 localhost:18789,
+                           處理排程、Discord/LINE 路由;in-app LLM 不走它)
 ```
 
 **為什麼這樣切？** OpenClaw gateway 第一次冷啟動要 30-60 秒（plugin 探測），不適合放在「使用者點按鈕等回應」這條路徑上。但它的 cron + channel 系統很強，適合放在「使用者不在 LobsterAQI 也能收到推播」這條路徑上。
@@ -255,22 +267,17 @@ openclaw memory reindex --skill aqi-knowledge
 ## 📁 檔案結構
 
 ```
-aqi_dashboard/
-├── app.py                  # Streamlit 主入口（封面 / 劇場 / 9 sections）
-├── data.py                 # MOENV / Open-Meteo fetch + LLM_PROVIDERS + call_llm_api
+aqi-tw-personal-main/
+├── app.py                  # Streamlit 主入口（封面 + 10 個 SECTION + 城市深入 modal + AI 助理）
+├── data.py                 # EPA / Open-Meteo / CivilIoT / LASS fetcher + LLM_PROVIDERS + call_llm_api
+├── tsdb.py                 # SQLite 本機時序快取(aqi_snapshots / cams_hourly / health_diary)
 ├── charts.py               # Plotly 圖表工廠
 ├── styles.py               # 深色主題 CSS
-├── openclaw_client.py      # 薄 subprocess wrapper（給訂閱頁用 OpenClaw CLI）
-├── pages/
-│   ├── 1_城市深入.py
-│   ├── 2_城市並排比較.py
-│   └── 3_個人訂閱.py
+├── _city_detail.py         # 城市深入 modal 共用渲染(底線前綴避免被 Streamlit pages 探索)
 ├── openclaw_agents/        # 3 個 agent 的 SOUL.md / IDENTITY.md（給 OpenClaw 進階用）
-│   ├── collector/
-│   ├── scraper/
-│   ├── analyst/
-│   ├── critic/
-│   └── advisor/
+│   ├── advisor/            # 預警員
+│   ├── analyst/            # 分析師
+│   └── collector/          # 採集者
 ├── openclaw_skills/
 │   └── aqi-knowledge/      # SKILL.md +（跑 scripts/build_knowledge.bat 後填入 PDF）
 ├── scripts/
@@ -278,9 +285,11 @@ aqi_dashboard/
 │   └── setup_cron.bat      # 註冊 OpenClaw 排程
 ├── docs/
 │   └── knowledge_sources.md
+├── CHANGELOG.md            # 變更紀錄
+├── .gitignore
+├── .streamlit/config.toml
 ├── requirements.txt
 ├── run.bat                 # Windows 雙擊啟動器
-├── .streamlit/config.toml
 └── README.md
 ```
 
