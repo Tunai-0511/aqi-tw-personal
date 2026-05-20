@@ -379,6 +379,25 @@ OUTDOOR_ACTIVITIES = [
     {"id": "outdoor_work", "label": "戶外工作", "icon": "👷"},
 ]
 
+# 12 項與空氣污染高關聯的 ICD-10 疾病 — 個人化推薦時供使用者勾選「我已被診斷的疾病」
+# 用途:寫進 OpenClaw MEMORY.md 並注入 LLM prompt,讓 AI 助理 / 預警員給專屬建議
+# 不是 sensitive group 的替代 — SENSITIVE_GROUPS 是 UI 入口的快速 selection,
+# 這裡是進階檔案,允許使用者明確聲明診斷碼,精細度更高。
+USER_ICD10_OPTIONS = [
+    {"code": "J45",      "label": "氣喘",                  "icon": "🫁"},
+    {"code": "J44",      "label": "慢性阻塞性肺病 (COPD)", "icon": "🫁"},
+    {"code": "J42-J43",  "label": "慢性支氣管炎 / 肺氣腫", "icon": "🫁"},
+    {"code": "J30",      "label": "過敏性鼻炎",            "icon": "🤧"},
+    {"code": "I10",      "label": "高血壓",                "icon": "❤️"},
+    {"code": "I20-I25",  "label": "冠心症 / 缺血性心臟病", "icon": "❤️"},
+    {"code": "I48",      "label": "心律不整 / 心房顫動",   "icon": "❤️"},
+    {"code": "I50",      "label": "心臟衰竭",              "icon": "❤️"},
+    {"code": "E11",      "label": "第二型糖尿病",          "icon": "💉"},
+    {"code": "F03",      "label": "失智症",                "icon": "🧠"},
+    {"code": "Z33",      "label": "懷孕中",                "icon": "🤰"},
+    {"code": "C34",      "label": "肺癌（治療中/緩解）",   "icon": "🎗"},
+]
+
 
 # ─── 3-agent Pipeline 設定 (Agent Pipeline Configuration) ──────────────────
 
@@ -1477,7 +1496,13 @@ def call_llm_api(
                 return None
             data = r.json()
             try:
-                return clean_llm_output(data["content"][0]["text"])
+                text = data["content"][0]["text"]
+                # 偵測 max_tokens 截斷 — 之前使用者多次反映「話講一半就停」,
+                # 根因就是達上限後 LLM 在句子中間切斷,而我們沒告知使用者。
+                # 現在明確附上提示,使用者就知道要追問或調高上限。
+                if data.get("stop_reason") == "max_tokens":
+                    text += "\n\n_(⚠ 回應達 max_tokens 上限,可能未完整 — 可追問細節或調高設定)_"
+                return clean_llm_output(text)
             except (KeyError, IndexError, TypeError) as e:
                 LAST_LLM_ERROR = f"Anthropic 回應解析失敗（{type(e).__name__}）：{str(data)[:200]}"
                 return None
@@ -1511,7 +1536,13 @@ def call_llm_api(
                 return None
             data = r.json()
             try:
-                return clean_llm_output(data["choices"][0]["message"]["content"])
+                choice = data["choices"][0]
+                text = choice["message"]["content"]
+                # OpenAI 格式的截斷標記為 finish_reason='length'(同樣涵蓋 Gemini /
+                # MiniMax / OpenAI / custom 走這條路徑的 provider)。同樣附上提示。
+                if choice.get("finish_reason") == "length":
+                    text += "\n\n_(⚠ 回應達 max_tokens 上限,可能未完整 — 可追問細節或調高設定)_"
+                return clean_llm_output(text)
             except (KeyError, IndexError, TypeError) as e:
                 LAST_LLM_ERROR = f"{provider} 回應解析失敗（{type(e).__name__}）：{str(data)[:200]}"
                 return None

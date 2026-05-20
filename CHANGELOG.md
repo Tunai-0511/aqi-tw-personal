@@ -20,7 +20,64 @@
 
 ---
 
-## [2026-05-16] 全面審查 — 過時註解 + README 重寫 + outdoor 死碼移除 + tsdb created_at
+## [2026-05-20] SECTION · 08 個人化推薦 — RAG 個人化升級(雙管齊下)
+
+回應使用者質疑「為甚麼是這五大群?這樣真的有個人化部分嗎?」 — 五大群是 UI 入口的快速 selection,不是個人化的全部。升級後,使用者可在進階檔案填入「年齡 / 性別 / BMI / 已診斷疾病(ICD-10)/ 病歷重點 / 個人病歷文件」,這些資料會注入 LLM prompt + 進入 RAG(personal scope 享 1.4× 加權),讓 AI 助理 / 分析師 / 預警員給專屬建議。**現有公式 `safe_hours` 刻意不動** — 公式給快速量化指標,LLM 給為什麼。
+
+### Added
+- **`USER_ICD10_OPTIONS` 常數**([data.py:383-400](data.py)) — 12 項與空氣污染高關聯的 ICD-10:氣喘 J45 / COPD J44 / 慢性支氣管炎 J42-J43 / 過敏性鼻炎 J30 / 高血壓 I10 / 冠心症 I20-I25 / 心律不整 I48 / 心衰 I50 / 第二型糖尿病 E11 / 失智 F03 / 懷孕 Z33 / 肺癌 C34。
+- **`_ingest_personal_medical_file()`**([app.py:387-411](app.py)) — wrapper 包裝既有 `_ingest_uploaded_file`,把上傳結果標 `scope="personal"`、source 前綴 `[個人病歷]`、並寫入 `user_med_files` metadata。
+- **`_calc_bmi()` + `_personal_profile_block()`**([app.py:1471-1599](app.py)) — 兩個 helper:BMI 用 WHO 標準分類;profile_block 拼裝給 LLM 的 prompt 注入段落,**使用者完全沒填時回空字串**(零回歸保證)。
+- **SECTION · 08 進階個人健康檔案 expander**([app.py:2934-3057](app.py)) — 在既有三個 selectbox 之後新增 `st.expander`,內含:隱私警語 / 年齡 / 性別 / 身高 / 體重(BMI 即時) / ICD-10 multiselect / 病歷重點 text_area / 個人病歷檔上傳(PDF / TXT / MD)/ 清除按鈕。
+- **session_state 新增 7 個 key**([app.py:185-194](app.py)) — `user_age` / `user_sex` / `user_height_cm` / `user_weight_kg` / `user_diagnoses` / `user_med_history` / `user_med_files`。
+
+### Changed
+- **RAG chunk schema 從 `{source, text, page}` → `{source, text, page, scope}`** — `scope` 為 `"global"`(預植入 + sidebar 上傳的通用文獻)或 `"personal"`(個人病歷)。`_seed_rag_chunks`([app.py:319-336](app.py)) 與 `_ingest_uploaded_file`([app.py:339-385](app.py)) 都補 `scope="global"`。
+- **`retrieve_rag_chunks()`**([app.py:413-447](app.py)) — 對 `scope=="personal"` 的 chunk 乘 `PERSONAL_BOOST = 1.4`,讓個人病歷在檢索時優先被命中。fallback(全 miss 回 starter)行為不變。
+- **`_build_chat_context()`**([app.py:1602-1650](app.py)) — 在「各 agent 分析摘要」之前注入 `_personal_profile_block()`,使用者沒填時為空(零回歸)。
+- **AI 助理 `full_prompt`**([app.py:1707-1718](app.py)) — rag_block 之後追加一句:「若上方有『使用者個人健康檔案』段落,請在建議中明確提及該因素(年齡 / BMI / 已診斷疾病 / 病歷重點)如何影響此使用者的個人風險」。
+- **Pipeline 分析師(B) `_agent_llm` prompt**([app.py:902-928](app.py)) — prompt 字串前插入 `_personal_profile_block()`;第 ② 段請 LLM 對「使用者本人」(年齡 / BMI / 已診斷)給 1-2 句量身建議。
+- **Pipeline 預警員(C) `_agent_llm` prompt**([app.py:960-989](app.py)) — 同上,額外請 LLM 在 5 大群建議後附加「🩺 給你本人的建議」段落,依年齡 + ICD-10 + 病歷重點給 2-3 句具體建議。
+- **MEMORY.md 寫入內容**([app.py:3071-3097](app.py)) — 從原本 3 欄(城市 / 健康狀況 / 活動)擴充為 5 區塊(基本資料 / 常駐城市與活動 / ICD-10 / 病歷重點 / 已上傳病歷文件),寫入路徑(`~/.openclaw/agents/{analyst,advisor}/agent/MEMORY.md`)不變。
+
+### Privacy
+- expander 內固定顯示 `st.info` 隱私警語:資料寫本機 MEMORY.md(純文字未加密)+ 送雲端 LLM API(使用者自己設定的 key),**不傳給專案作者或任何第三方**。
+- 新增「🗑 清除個人健康資料」按鈕:一鍵 reset 7 個 user_* 欄位 + 從 `rag_chunks` 移除所有 `scope=="personal"` 的 chunks。
+
+### Unchanged(刻意保留)
+- **`safe_hours` 公式**([app.py:3013](app.py)) — 仍為 `max(0, 12 - (current_aqi - GROUP_AQI_LIMIT[gid]) × 0.15)`,不依年齡 / BMI / 疾病微調。理由:避免「為何 BMI>30 扣 5 點」這類無實證的 magic number 引來同一質疑;個人化全部發生在 LLM prompt 端。
+- **既有三個 selectbox(城市 / 活動 / 健康狀況)** — 維持原欄位,新欄位放 expander 內,避免一次資訊過載。
+- **Retrieval 演算法** — 仍是 2-char n-gram 字元重疊(無依賴、跨中英文),只多了 personal boost 加權,沒改基礎演算法。
+
+### Verification
+```powershell
+cd C:\Users\tunai\Downloads\aqi-tw-personal-main
+.venv\Scripts\python.exe -m py_compile app.py data.py
+streamlit run app.py
+```
+
+手動測試 checklist:
+1. **零回歸**:不展開新 expander → SECTION · 08 與 AI 助理輸出與升級前 100% 一致
+2. **個人 profile 注入**:展開 expander,填年齡=72 / BMI=29.4 / 勾「COPD」「高血壓」 / 病歷寫「2020 確診 COPD GOLD II 級」→ 跑 Pipeline → 預警員(C)輸出應**明確提及 72 歲 / COPD / 高血壓**,並有「🩺 給你本人的建議」段落
+3. **個人病歷 RAG**:上傳一份假病歷 TXT → 開 AI 助理問「我的肺功能允許做什麼運動」→ 「📚 引用 RAG」抽屜應含該病歷 chunk(1.4× 加權命中)
+4. **MEMORY.md**:按「💾 同步」→ 開 `~/.openclaw/agents/analyst/agent/MEMORY.md` 應見 5 區塊(基本資料 / 常駐城市與活動 / ICD-10 / 病歷重點 / 已上傳文件)
+5. **清除按鈕**:按「🗑 清除個人健康資料」→ 7 個欄位回預設 + `rag_chunks` 中 personal 條目消失
+6. **公式未變**:SECTION · 08 個人化健康指數卡的 `safe_hours` 數字與升級前完全相同
+7. **無 LLM key fallback**:清空 sidebar 的 LLM key → 跑 Pipeline → cards 仍正常顯示,不因 profile 注入而 crash
+
+---
+
+## [2026-05-15 後續] AI 助理修兩個 bug:輸入框釘底 + 回應截斷偵測
+
+### Fixed
+- **聊天輸入框未常駐底部**([styles.py:1016-1052](styles.py)) — 之前用 `margin-top: auto + flex-shrink: 0 + order: 99` 的方案理論上可行,但實測無效。根因是 Streamlit 在 `.st-key-floating_chat` 與 `[data-testid="stChatInput"]` 之間插了 `stVerticalBlockBorderWrapper` 等包裝元素,flex 屬性無法跨層 propagate。**改用 `position: absolute` 直接以 panel 為定位錨點**(panel 已是 `position: fixed`,提供 positioning context),輸入框 `bottom: 14px / left: 16px / right: 16px` 永遠釘底。chat_history 加 `padding-bottom: 64px` 預留輸入框空間。
+- **LLM 回應「話講一半就停」**([app.py:1683-1693](app.py)、[data.py:1546-1555](data.py)、[data.py:1583-1596](data.py)) — 兩個原因疊加:
+  - **a) max_tokens 上限太低** — 原 `max_tokens=4096`,Claude 達上限後直接截斷在句子中間,而舊 `call_llm_api` **未偵測 stop_reason='max_tokens'**,使用者完全看不出是被截掉的。
+  - **b) timeout 太短** — 原 `timeout=25`,長回應的生成可能需要 30-40s,容易在中途逾時返回 None(顯示 fallback 摘要)。
+  - **修法**:聊天 max_tokens → 8192、timeout → 60s;同時在 `call_llm_api` 偵測 Anthropic `stop_reason=='max_tokens'` 與 OpenAI 格式 `finish_reason=='length'`,截斷時自動附加「⚠ 回應達 max_tokens 上限,可能未完整 — 可追問細節或調高設定」標示。
+---
+
+## [2026-05-16] 全面審查
 
 ### Fixed
 - **app.py module docstring**([app.py:11-22](app.py)) — SECTION 列表只有 01/02/03/09/10,補完 04-08(污染物剖析 / 環境關聯 / 官民比較 / 健康預警 / 個人化推薦)
@@ -55,6 +112,15 @@
 ### Verification
 ```powershell
 cd C:\Users\tunai\Downloads\aqi-tw-personal-main
+.venv\Scripts\python.exe -m py_compile app.py styles.py data.py tsdb.py charts.py _city_detail.py
+streamlit run app.py
+```
+功能測試清單:
+- [ ] 右下角開啟聊天面板 → 輸入框永遠在最底(對話有 0、1、5、20 則訊息都測試)
+- [ ] 拉長視窗 / 縮小視窗 → 輸入框跟著 panel 底邊
+- [ ] 問一個複雜問題(如「5 類敏感族群的詳細運動建議」)→ 回應完整,即使超過原 4096 token 也不截斷
+- [ ] 若不幸還是達到 8192 上限 → 訊息末尾應有「⚠ 回應達 max_tokens 上限」提示
+- [ ] 連續發 5 則訊息 → input 永遠可用、永遠在底
 .venv\Scripts\python.exe -m py_compile app.py tsdb.py charts.py styles.py _city_detail.py data.py
 .venv\Scripts\Activate.ps1
 streamlit run app.py
