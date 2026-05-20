@@ -12,6 +12,14 @@
 
 ---
 
+## [2026-05-20] Bug 修復:button width 參數 + 健康日誌 avg_aqi 數值型別 (by Einosensokami)
+
+### Fixed
+- **app.py `st.button` 不支援 `width='stretch'`**([app.py:2617](app.py)) — `ButtonMixin.button()` 收到未知參數 `width`,拋出 `TypeError`。移除该參數,按鈕寬度由 `st.columns` 容器自動控制。
+- **app.py 健康日誌 `_display_df["avg_aqi"].round(1)` 型別錯誤**([app.py:3134](app.py)) — `round()` 要求數值型別,傳入 `object` _dtype 導致 `TypeError: Expected numeric dtype, got object instead`。改用 `pd.to_numeric(..., errors="coerce")` 先轉型再 round,同步修復 `peak_aqi` 欄位。
+
+---
+
 ## [2026-05-16] 全面審查 — 過時註解 + README 重寫 + outdoor 死碼移除 + tsdb created_at
 
 ### Fixed

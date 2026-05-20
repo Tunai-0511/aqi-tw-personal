@@ -2615,7 +2615,6 @@ with fc1:
         active = g["id"] in st.session_state.selected_groups
         label = f"{g['icon']} {g['label']}"
         if cols[i].button(label, key=f"group_{g['id']}",
-                            width='stretch',
                             type=("primary" if active else "secondary")):
             if active:
                 st.session_state.selected_groups.remove(g["id"])
@@ -3132,8 +3131,8 @@ with diary_c2:
         with st.expander(f"📋 最近 30 天打卡紀錄({len(_diary_aqi)} 筆)"):
             _display_df = _diary_aqi.copy()
             _display_df["date"] = _display_df["date"].dt.strftime("%Y-%m-%d")
-            _display_df["avg_aqi"] = _display_df["avg_aqi"].round(1)
-            _display_df["peak_aqi"] = _display_df["peak_aqi"].round(1)
+            _display_df["avg_aqi"] = pd.to_numeric(_display_df["avg_aqi"], errors="coerce").round(1)
+            _display_df["peak_aqi"] = pd.to_numeric(_display_df["peak_aqi"], errors="coerce").round(1)
             st.dataframe(
                 _display_df.rename(columns={
                     "date": "日期",
