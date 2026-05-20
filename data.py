@@ -379,6 +379,25 @@ OUTDOOR_ACTIVITIES = [
     {"id": "outdoor_work", "label": "戶外工作", "icon": "👷"},
 ]
 
+# 12 項與空氣污染高關聯的 ICD-10 疾病 — 個人化推薦時供使用者勾選「我已被診斷的疾病」
+# 用途:寫進 OpenClaw MEMORY.md 並注入 LLM prompt,讓 AI 助理 / 預警員給專屬建議
+# 不是 sensitive group 的替代 — SENSITIVE_GROUPS 是 UI 入口的快速 selection,
+# 這裡是進階檔案,允許使用者明確聲明診斷碼,精細度更高。
+USER_ICD10_OPTIONS = [
+    {"code": "J45",      "label": "氣喘",                  "icon": "🫁"},
+    {"code": "J44",      "label": "慢性阻塞性肺病 (COPD)", "icon": "🫁"},
+    {"code": "J42-J43",  "label": "慢性支氣管炎 / 肺氣腫", "icon": "🫁"},
+    {"code": "J30",      "label": "過敏性鼻炎",            "icon": "🤧"},
+    {"code": "I10",      "label": "高血壓",                "icon": "❤️"},
+    {"code": "I20-I25",  "label": "冠心症 / 缺血性心臟病", "icon": "❤️"},
+    {"code": "I48",      "label": "心律不整 / 心房顫動",   "icon": "❤️"},
+    {"code": "I50",      "label": "心臟衰竭",              "icon": "❤️"},
+    {"code": "E11",      "label": "第二型糖尿病",          "icon": "💉"},
+    {"code": "F03",      "label": "失智症",                "icon": "🧠"},
+    {"code": "Z33",      "label": "懷孕中",                "icon": "🤰"},
+    {"code": "C34",      "label": "肺癌（治療中/緩解）",   "icon": "🎗"},
+]
+
 
 # ─── 3-agent Pipeline 設定 (Agent Pipeline Configuration) ──────────────────
 
