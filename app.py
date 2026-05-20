@@ -54,6 +54,7 @@ import streamlit as st
 from data import (
     AGENTS, AQI_LEVELS, CITIES, CITY_BY_ID, GROUP_ADVICE,
     LLM_PROVIDERS, OUTDOOR_ACTIVITIES, POLLUTANTS, SENSITIVE_GROUPS,
+    USER_ICD10_OPTIONS,
     aqi_to_level,
     call_llm_api,
     fetch_citizen_sensors,
@@ -182,6 +183,15 @@ def init_state():
         "user_activity":   "running",        # 個人化推薦的關心活動類型
         # 個人 AQI 預警閾值(P1 #1):主畫面會 highlight「你的城市 AQI > 這個門檻」
         "user_aqi_threshold": 100,           # 預設 100(對敏感族群不健康的界線)
+        # ── 進階個人健康檔案(RAG 個人化升級,SECTION · 08 expander)──
+        # 寫進 OpenClaw MEMORY.md + 注入 LLM prompt 供分析師 / 預警員 / AI 助理參考
+        "user_age":         30,              # 0-120 歲
+        "user_sex":         "prefer_not",    # female / male / other / prefer_not
+        "user_height_cm":   165.0,           # 用於計算 BMI(80-230 cm)
+        "user_weight_kg":   60.0,            # 用於計算 BMI(20-200 kg)
+        "user_diagnoses":   [],              # list of ICD-10 codes(來自 USER_ICD10_OPTIONS)
+        "user_med_history": "",              # text_area 病歷重點(使用者自填)
+        "user_med_files":   [],              # 已上傳的個人病歷檔 metadata list[{name, n_chunks}]
         "chat_expanded":   False,            # 浮動聊天面板是展開還是收起(FAB)
         "selected_hour":   None,             # 時間軸 slider 位置(None = 當前快照)
     }
@@ -265,10 +275,13 @@ RAG_SNIPPETS = [
 
 
 # ─── PDF / TXT 抽取 helpers ─────────────────────────────────────────────────
-# RAG chunk 的資料結構: { "source": str, "text": str, "page": int }
+# RAG chunk 的資料結構: { "source": str, "text": str, "page": int, "scope": str }
 # - source:文獻名 + 頁碼(顯示在引用區)
 # - text:該 chunk 的文字內容(400-500 字)
 # - page:該 chunk 來自原文的第幾頁
+# - scope:"global"(預植入 + sidebar 上傳的通用文獻)或 "personal"(個人病歷)
+#         retrieve_rag_chunks 會對 personal 的 chunk 乘 PERSONAL_BOOST(1.4×)加權,
+#         讓個人病歷在檢索時優先被命中。
 #
 # 預植入的 4 份來自 RAG_SNIPPETS;使用者上傳的 PDF/TXT/MD 用 pdfplumber 抽取後 append。
 # ─────────────────────────────────────────────────────────────────────────────
@@ -325,8 +338,9 @@ def _seed_rag_chunks() -> None:
     if st.session_state.get("rag_chunks"):
         return
     # 把 RAG_SNIPPETS 轉成 chunk 格式(統一 schema 後 retrieval 邏輯不用分支)
+    # scope="global":這些是權威通用文獻,不享有 personal boost 加權
     st.session_state.rag_chunks = [
-        {"source": s["source"], "text": s["quote"], "page": 1}
+        {"source": s["source"], "text": s["quote"], "page": 1, "scope": "global"}
         for s in RAG_SNIPPETS
     ]
 
@@ -358,6 +372,7 @@ def _ingest_uploaded_file(f) -> int:
                             "source": f"{f.name} · 頁 {i}",
                             "text":   para,
                             "page":   i,
+                            "scope":  "global",
                         })
                         added += 1
         else:  # .txt / .md / anything else read as utf-8 text
@@ -372,10 +387,39 @@ def _ingest_uploaded_file(f) -> int:
                     "source": f.name,
                     "text":   para,
                     "page":   1,
+                    "scope":  "global",
                 })
                 added += 1
     except Exception as e:
         st.warning(f"無法解析 {f.name}：{type(e).__name__}: {e}")
+    return added
+
+
+def _ingest_personal_medical_file(f) -> int:
+    """處理使用者上傳的「個人病歷」檔,標記為 scope="personal"。
+
+    走和 `_ingest_uploaded_file` 同一條 pdfplumber 解析路徑,但:
+      - 每個 chunk 的 source 前綴 "[個人病歷] "(視覺上明顯區分)
+      - scope 改為 "personal" → retrieve_rag_chunks 會給 1.4× 加權
+      - 在 st.session_state.user_med_files 寫入一筆 metadata,
+        供 SECTION · 08 UI 顯示「已上傳 X 份個人病歷」以及清除按鈕使用。
+
+    Returns
+    -------
+    int
+        新增的 chunk 數量
+    """
+    # 記住開始時的 chunk index,結束後把這段新增的 chunks 改 scope + 加 prefix
+    start_idx = len(st.session_state.rag_chunks)
+    added = _ingest_uploaded_file(f)
+    if added > 0:
+        for c in st.session_state.rag_chunks[start_idx:]:
+            c["scope"]  = "personal"
+            c["source"] = f"[個人病歷] {c['source']}"
+        st.session_state.user_med_files.append({
+            "name":     f.name,
+            "n_chunks": added,
+        })
     return added
 
 
@@ -431,8 +475,16 @@ def retrieve_rag_chunks(query: str, top_k: int = 5) -> list[dict]:
     chunks = st.session_state.get("rag_chunks") or []
     if not chunks:
         return []
-    # 對每個 chunk 計分,降冪排序
-    scored = [(c, _score_chunk(query, c["text"])) for c in chunks]
+    # 對每個 chunk 計分;scope=="personal" 乘 1.4× 加權,讓使用者上傳的個人病歷
+    # 在檢索時優先被命中(個人病歷與使用者問題語境最相關,但通常字數較少,
+    # 不加權會被長篇通用文獻擠下排名)。
+    PERSONAL_BOOST = 1.4
+    scored = []
+    for c in chunks:
+        s = _score_chunk(query, c["text"])
+        if c.get("scope") == "personal":
+            s *= PERSONAL_BOOST
+        scored.append((c, s))
     scored.sort(key=lambda x: x[1], reverse=True)
     # 只保留有命中的(score > 0);若全 miss 則回 starter chunks 確保 LLM 有上下文
     top = [c for c, s in scored[:top_k] if s > 0]
@@ -899,8 +951,12 @@ def run_pipeline(
     if has_llm:
         push_log("B", f"請 {prov_name} 生成 3 段風險分析報告", to="LLM")
         _refresh_log()
+        # 注入個人 profile(若使用者沒填則為空字串,零回歸)
+        b_profile = _personal_profile_block()
+        b_profile_section = (b_profile + "\n") if b_profile else ""
         b_resp, b_err = _agent_llm(
-            f"台灣即時空品快報（{datetime.now().strftime('%Y-%m-%d %H:%M')}）：\n"
+            b_profile_section
+            + f"台灣即時空品快報（{datetime.now().strftime('%Y-%m-%d %H:%M')}）：\n"
             f"- 全國平均 AQI：{avg_aqi_pipe:.1f}\n"
             f"- 最高：{worst_pipe['city']} AQI {worst_pipe['aqi']:.0f}（{worst_pipe['level']}），PM2.5 {worst_pipe['PM2.5']} μg/m³\n"
             f"- 最低：{best_pipe['city']} AQI {best_pipe['aqi']:.0f}（{best_pipe['level']}），PM2.5 {best_pipe['PM2.5']} μg/m³\n"
@@ -910,7 +966,12 @@ def run_pipeline(
             f"- EPA NAAQS：PM2.5 24h ≤ 35 μg/m³\n"
             f"- Lancet 2023：高 PM2.5 下劇烈運動，肺部沉積量 ↑3-5x\n\n"
             f"請用 3 段繁體中文輸出：① 現況摘要 ② 敏感族群建議 ③ 未來 6 小時研判。"
-            f"每段 2-3 句，必須引用上方數值，不可編造其他城市或數字。",
+            f"每段 2-3 句，必須引用上方數值，不可編造其他城市或數字。"
+            + (
+                "若上方有「使用者個人健康檔案」，第 ② 段請額外針對此使用者個人"
+                "（依其年齡 / BMI / 已診斷疾病）給 1-2 句量身建議。"
+                if b_profile else ""
+            ),
             max_tokens=4096,
         )
         if b_resp:
@@ -945,15 +1006,26 @@ def run_pipeline(
             f"- {r['city']}：AQI {r['aqi']:.0f}（{r['level']}），PM2.5 {r['PM2.5']} μg/m³"
             for _, r in top_worst.iterrows()
         )
+        # 注入個人 profile(若使用者沒填則為空字串,零回歸)
+        c_profile = _personal_profile_block()
+        c_profile_section = (c_profile + "\n") if c_profile else ""
         c_resp, c_err = _agent_llm(
-            f"你是預警員（健康預警）。前三高 AQI 城市：\n{top_list}\n\n"
+            c_profile_section
+            + f"你是預警員（健康預警）。前三高 AQI 城市：\n{top_list}\n\n"
             f"請針對下列 5 類敏感族群，**每類各給 1-2 句具體建議**（總計 5 段、可分行）：\n"
             f"① 👴 老人（避免時段、佩戴口罩等級、血壓注意事項）\n"
             f"② 🧒 幼童（戶外活動限制、學校體育課建議）\n"
             f"③ 🫁 氣喘患者（用藥提醒、出門時機、求醫時機）\n"
             f"④ ❤️ 心血管疾病（運動強度、症狀警訊）\n"
             f"⑤ 🤰 孕婦（室內空品、外出防護）\n"
-            f"必須提及上述具體城市名稱與 AQI 數值，不可編造其他城市或人口統計。",
+            f"必須提及上述具體城市名稱與 AQI 數值，不可編造其他城市或人口統計。"
+            + (
+                "\n\n**最後**：若上方有「使用者個人健康檔案」，請額外輸出一段"
+                "「🩺 給你本人的建議」，依其年齡 / BMI / 已診斷疾病 / 病歷重點"
+                "給 2-3 句針對個人風險的具體建議（例如：72 歲 + COPD GOLD II 級在這種 PM2.5 下"
+                "該不該出門、需要哪種等級的口罩）。"
+                if c_profile else ""
+            ),
             max_tokens=4096,
         )
         if c_resp:
@@ -1458,6 +1530,90 @@ ANTI_HALLUCINATION_SYSTEM = (
 )
 
 
+# ─── 個人化健康檔案 helpers(RAG 個人化升級)──────────────────────────────
+# 兩個 helper 處理「進階個人健康檔案」(SECTION · 08 expander)的衍生資料:
+#   - _calc_bmi:由身高體重計算 BMI 與中文分類(用於 UI 即時顯示 + MEMORY.md 寫入)
+#   - _personal_profile_block:把全部個人欄位拼成 LLM prompt 注入段落
+# 若使用者沒填任何欄位(零回歸測試),_personal_profile_block 回空字串,
+# 所有 prompt 的內容就會與升級前完全一致。
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _calc_bmi(height_cm: float, weight_kg: float) -> tuple[float, str]:
+    """由身高 cm 與體重 kg 計算 BMI,並回傳 (BMI 數值, 中文分類)。
+
+    分類依 WHO 標準(亞洲略嚴於歐美但本專案用 WHO 通用版以求一致):
+      < 18.5     過輕
+      18.5-23.9  正常
+      24-26.9    過重
+      27-29.9    輕度肥胖
+      30-34.9    中度肥胖
+      ≥ 35       重度肥胖
+
+    Returns
+    -------
+    tuple[float, str]
+        (bmi, category) — height<=0 時回 (0.0, "—")
+    """
+    if height_cm <= 0:
+        return 0.0, "—"
+    h_m = height_cm / 100.0
+    bmi = weight_kg / (h_m * h_m)
+    if bmi < 18.5:   cat = "過輕"
+    elif bmi < 24:   cat = "正常"
+    elif bmi < 27:   cat = "過重"
+    elif bmi < 30:   cat = "輕度肥胖"
+    elif bmi < 35:   cat = "中度肥胖"
+    else:            cat = "重度肥胖"
+    return bmi, cat
+
+
+def _personal_profile_block() -> str:
+    """組合給 LLM 的「使用者個人健康檔案」段落,供 prompt 注入用。
+
+    用途:在 _build_chat_context、Pipeline 分析師(B)、預警員(C)的 prompt 中
+    各插入這段,LLM 就能看到 年齡 / 性別 / BMI / ICD-10 診斷 / 病歷重點,
+    給出比通用建議更具體的個人化回答。
+
+    為什麼空檔案回空字串?
+      使用者沒填(初次造訪、未展開 expander)時,我們不想干擾 LLM —
+      回空字串表示「prompt 注入完全不發生」,LLM 行為與升級前 100% 一致。
+      只有當使用者主動填寫至少一個欄位(年齡>0 / 有診斷 / 有病歷)才注入。
+
+    Returns
+    -------
+    str
+        多行字串(含尾端 \\n),或空字串(""):當使用者完全沒填時。
+    """
+    age   = st.session_state.get("user_age", 0) or 0
+    diags = st.session_state.get("user_diagnoses", []) or []
+    hist  = (st.session_state.get("user_med_history") or "").strip()
+    # 三個關鍵欄位全空 → 不注入(零回歸)
+    if not (age or diags or hist):
+        return ""
+    bmi, bmi_cat = _calc_bmi(
+        st.session_state.get("user_height_cm", 0) or 0,
+        st.session_state.get("user_weight_kg", 0) or 0,
+    )
+    diag_text = "、".join(
+        f"{d['label']}({d['code']})"
+        for d in USER_ICD10_OPTIONS if d["code"] in diags
+    ) or "無"
+    sex_label = {
+        "female":      "女",
+        "male":        "男",
+        "other":       "其他",
+        "prefer_not":  "未提供",
+    }.get(st.session_state.get("user_sex", "prefer_not"), "未提供")
+    return (
+        "=== 使用者個人健康檔案（請在回答中明確參考這些因素）===\n"
+        f"年齡：{age} 歲 / 性別：{sex_label} / BMI：{bmi:.1f}（{bmi_cat}）\n"
+        f"已診斷疾病：{diag_text}\n"
+        f"病歷重點：{hist or '（未填）'}\n"
+        "請在建議中明確提及這些因素如何影響此使用者的個人風險（例如年齡>65、有 COPD、BMI 過重等），"
+        "不要僅給通用建議。\n"
+    )
+
+
 def _build_chat_context() -> str:
     """組裝給 AI 助理 LLM 的「結構化事實上下文」。
 
@@ -1486,6 +1642,9 @@ def _build_chat_context() -> str:
     worst = snap.sort_values('aqi', ascending=False).iloc[0]
     best  = snap.sort_values('aqi').iloc[0]
     mode  = "LIVE 即時 EPA API" if st.session_state.data_mode == "real" else "MOCK 模擬資料"
+    # 個人化檔案注入(若使用者已填則回非空字串,否則為 "" 不影響 prompt)
+    profile = _personal_profile_block()
+    profile_section = (profile + "\n") if profile else ""
     return (
         f"=== 資料快照（{datetime.now().strftime('%Y-%m-%d %H:%M')}） ===\n"
         f"資料來源：{mode}\n"
@@ -1494,7 +1653,8 @@ def _build_chat_context() -> str:
         f"最低城市：{best['city']} AQI {best['aqi']:.0f}（{best['level']}）\n"
         f"覆蓋城市數：{len(snap)}\n\n"
         f"各城市詳細數據：\n" + "\n".join(rows) + "\n\n"
-        f"=== 各 agent 分析摘要 ===\n"
+        + profile_section
+        + f"=== 各 agent 分析摘要 ===\n"
         f"分析師（風險分析）：{st.session_state.get('llm_analysis', '（未生成）')}\n"
         f"預警員（健康預警）：{st.session_state.get('agent_c_advisories', '（未生成）')}\n"
     )
@@ -1658,6 +1818,9 @@ def _render_chat_panel() -> None:
                 + "\n\n" + rag_block
                 + f"\n\n=== 使用者問題 ===\n{user_msg}\n\n"
                 "請嚴格依據上方資料作答。如資料不足，明確說明無法回答。"
+                "若上方有「使用者個人健康檔案」段落，請在建議中明確提及該因素"
+                "（年齡 / BMI / 已診斷疾病 / 病歷重點）如何影響此使用者的個人風險，"
+                "不要僅給通用建議。"
             )
 
             answer = None
@@ -2768,6 +2931,136 @@ with per1:
     )
     st.session_state.user_conditions = conds
 
+    # ── 進階個人健康檔案(RAG 個人化升級)──────────────────────────────────
+    # 在既有三個快選欄位之後,加入一個 expander,允許使用者填入更精細的健康資料:
+    #   年齡 / 性別 / 身高 / 體重(BMI) / 已診斷疾病(ICD-10) / 病歷重點 / 病歷上傳
+    # 這些資料會在「💾 同步至 OpenClaw 記憶體」時寫進本機 MEMORY.md,並在每次
+    # LLM 呼叫(AI 助理、分析師、預警員)時注入 prompt,讓回答能引用個人因素。
+    # 使用者完全不填(預設值)時,_personal_profile_block() 回空字串,prompt 與
+    # 升級前完全一致 → 零回歸。
+    # ────────────────────────────────────────────────────────────────────────
+    with st.expander("🩺 進階個人健康檔案（用於 RAG 個人化）", expanded=False):
+        st.info(
+            "🔒 **隱私說明** — 這些資料會在你按「💾 同步至 OpenClaw 記憶體」時寫入本機"
+            " `~/.openclaw/agents/*/MEMORY.md`(純文字)。當你向 AI 助理提問或跑 Pipeline 時，"
+            "這些資料會作為 prompt context 送到你**自己設定**的 LLM 雲端 API（Anthropic / "
+            "Gemini / OpenAI / MiniMax）。**不會傳給專案作者或任何第三方**；想移除請按下方"
+            "「🗑 清除個人健康資料」。"
+        )
+
+        # 年齡 + 性別(兩欄並排)
+        col_age, col_sex = st.columns(2)
+        with col_age:
+            st.session_state.user_age = st.number_input(
+                "👤 年齡",
+                min_value=0, max_value=120, step=1,
+                value=int(st.session_state.user_age),
+                key="user_age_input",
+            )
+        with col_sex:
+            _sex_opts = ["prefer_not", "female", "male", "other"]
+            _sex_labels = {"prefer_not": "不提供", "female": "女", "male": "男", "other": "其他"}
+            st.session_state.user_sex = st.selectbox(
+                "⚧ 性別",
+                options=_sex_opts,
+                index=_sex_opts.index(st.session_state.user_sex) if st.session_state.user_sex in _sex_opts else 0,
+                format_func=lambda s: _sex_labels.get(s, s),
+                key="user_sex_input",
+            )
+
+        # 身高 + 體重(兩欄並排)+ BMI 即時顯示
+        col_h, col_w = st.columns(2)
+        with col_h:
+            st.session_state.user_height_cm = st.number_input(
+                "📏 身高 (cm)",
+                min_value=80.0, max_value=230.0, step=0.5,
+                value=float(st.session_state.user_height_cm),
+                key="user_height_input",
+            )
+        with col_w:
+            st.session_state.user_weight_kg = st.number_input(
+                "⚖ 體重 (kg)",
+                min_value=20.0, max_value=200.0, step=0.5,
+                value=float(st.session_state.user_weight_kg),
+                key="user_weight_input",
+            )
+        _bmi, _bmi_cat = _calc_bmi(
+            st.session_state.user_height_cm, st.session_state.user_weight_kg
+        )
+        st.caption(f"BMI：**{_bmi:.1f}**（{_bmi_cat}）")
+
+        # ICD-10 multiselect
+        st.session_state.user_diagnoses = st.multiselect(
+            "🏥 已診斷疾病（ICD-10，可複選）",
+            options=[d["code"] for d in USER_ICD10_OPTIONS],
+            default=st.session_state.user_diagnoses,
+            format_func=lambda code: next(
+                f"{d['icon']} {d['label']} （{d['code']}）"
+                for d in USER_ICD10_OPTIONS if d["code"] == code
+            ),
+            key="user_diagnoses_input",
+            help="勾選你已被醫師確診的疾病。這會讓 AI 助理 / 預警員針對你的疾病給專屬建議。",
+        )
+
+        # 病歷重點 text_area
+        st.session_state.user_med_history = st.text_area(
+            "📝 病歷重點（自填，建議 100-300 字）",
+            value=st.session_state.user_med_history,
+            height=120,
+            placeholder=(
+                "例：2020 確診 COPD GOLD II 級，FEV1 65%；2022 心臟支架手術；"
+                "目前服用 Spiriva + Aspirin。空氣品質差時偶有咳嗽與胸悶。"
+            ),
+            key="user_med_history_input",
+        )
+
+        # 個人病歷檔案上傳(走 _ingest_personal_medical_file → scope="personal")
+        _uploaded_meds = st.file_uploader(
+            "📎 上傳個人病歷文件（可選，PDF / TXT / MD）",
+            type=["pdf", "txt", "md"],
+            accept_multiple_files=True,
+            key="user_med_files_uploader",
+            help=(
+                "上傳的內容會被切成段落加入 RAG 知識庫，並標記為「個人病歷」"
+                "（在檢索時享有 1.4× 加權，AI 助理 / Pipeline 會優先參考）。"
+            ),
+        )
+        if _uploaded_meds:
+            _already = {d["name"] for d in st.session_state.user_med_files}
+            for _mf in _uploaded_meds:
+                if _mf.name in _already:
+                    continue  # 避免同一檔重複上傳造成 chunk 暴增
+                _n = _ingest_personal_medical_file(_mf)
+                if _n > 0:
+                    st.success(f"✓ 已加入「{_mf.name}」({_n} 段) 為個人病歷 chunks")
+        if st.session_state.user_med_files:
+            st.caption(
+                "已上傳病歷：" + "、".join(
+                    f"`{d['name']}`({d['n_chunks']} 段)"
+                    for d in st.session_state.user_med_files
+                )
+            )
+
+        # 清除按鈕
+        if st.button(
+            "🗑 清除個人健康資料",
+            help="把上方所有欄位回預設,並從 RAG 池移除所有 scope=personal 的 chunks",
+            key="user_clear_health_btn",
+        ):
+            st.session_state.user_age         = 30
+            st.session_state.user_sex         = "prefer_not"
+            st.session_state.user_height_cm   = 165.0
+            st.session_state.user_weight_kg   = 60.0
+            st.session_state.user_diagnoses   = []
+            st.session_state.user_med_history = ""
+            st.session_state.user_med_files   = []
+            st.session_state.rag_chunks = [
+                c for c in st.session_state.rag_chunks
+                if c.get("scope") != "personal"
+            ]
+            st.success("✓ 已清除個人健康資料與 personal RAG chunks")
+            st.rerun()
+
     # Save profile to OpenClaw agents' MEMORY.md so they remember between sessions
     if st.button("💾 同步至 OpenClaw 記憶體", help="把上方設定寫進 analyst / advisor 的 MEMORY.md，下次它們會記得你"):
         from pathlib import Path
@@ -2776,16 +3069,47 @@ with per1:
             next(g["label"] for g in SENSITIVE_GROUPS if g["id"] == cid) for cid in conds
         ]
         activity_label = next(a["label"] for a in OUTDOOR_ACTIVITIES if a["id"] == activity)
+        # ── RAG 個人化升級:擴充 MEMORY.md 為 5 區塊 ─────────────────────
+        _bmi_m, _bmi_cat_m = _calc_bmi(
+            st.session_state.user_height_cm, st.session_state.user_weight_kg
+        )
+        _sex_label_m = {
+            "female": "女", "male": "男", "other": "其他", "prefer_not": "未提供"
+        }.get(st.session_state.user_sex, "未提供")
+        _icd_lines = "\n".join(
+            f"  - {d['icon']} {d['label']} ({d['code']})"
+            for d in USER_ICD10_OPTIONS
+            if d["code"] in st.session_state.user_diagnoses
+        ) or "  - 無"
+        _file_lines = "\n".join(
+            f"  - {d['name']}（{d['n_chunks']} chunks）"
+            for d in st.session_state.user_med_files
+        ) or "  - （無）"
+        _hist_text = (st.session_state.user_med_history or "").strip() or "（未填）"
+
         memory_text = (
             "# MEMORY.md — LobsterAQI User Profile\n\n"
-            "## User\n"
-            f"- 常駐城市：{CITY_BY_ID[user_city]['name']}（{user_city}）\n"
-            f"- 健康狀況：{', '.join(cond_labels) if cond_labels else '無'}\n"
-            f"- 主要戶外活動：{activity_label}\n"
-            f"- 最後更新：{_dt.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+            "## 基本資料\n"
+            f"- 年齡:{st.session_state.user_age} 歲\n"
+            f"- 性別:{_sex_label_m}\n"
+            f"- 身高 / 體重:{st.session_state.user_height_cm:.0f} cm / "
+            f"{st.session_state.user_weight_kg:.1f} kg(BMI {_bmi_m:.1f},{_bmi_cat_m})\n\n"
+            "## 常駐城市與活動\n"
+            f"- 常駐城市:{CITY_BY_ID[user_city]['name']}({user_city})\n"
+            f"- 健康狀況(快選五大群):{', '.join(cond_labels) if cond_labels else '無'}\n"
+            f"- 主要戶外活動:{activity_label}\n\n"
+            "## 已診斷疾病(ICD-10)\n"
+            f"{_icd_lines}\n\n"
+            "## 病歷重點(使用者自填)\n"
+            f"{_hist_text}\n\n"
+            "## 上傳的病歷文件\n"
+            f"{_file_lines}\n\n"
             "## How to use this memory\n"
-            "下次使用者問問題時，agent 應主動考量他的常駐城市與健康狀況，"
-            "不要每次都重新詢問背景。回答中提到城市時優先選使用者所在城市。\n"
+            "下次使用者問問題時,agent 應主動參考其年齡、BMI、ICD-10 診斷、病歷重點,"
+            "給出**符合該個人風險**的具體建議(例如:對 COPD 患者 PM2.5 > 35 即建議室內;"
+            "對 BMI>30 高血壓患者強調心血管警訊)。不要每次都重新詢問背景。"
+            "回答中提到城市時優先選使用者所在城市。\n"
+            f"- 最後更新:{_dt.now().strftime('%Y-%m-%d %H:%M')}\n"
         )
         written = []
         for agent_id in ("analyst", "advisor"):
