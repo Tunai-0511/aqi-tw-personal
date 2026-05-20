@@ -1662,6 +1662,13 @@ def _render_chat_panel() -> None:
 
             answer = None
             if has_llm:
+                # max_tokens 從 4096 拉到 8192:使用者反映「話講一半」就停 —
+                # 主要原因是 Claude 達 4096 上限後直接截斷在句子中間,而舊
+                # call_llm_api 並未偵測 stop_reason='max_tokens',使用者完全
+                # 看不出是被截掉的。8192 對 Q&A 已足夠,Claude 帳單照樣只
+                # 算實際輸出的 tokens 不會多花錢。
+                # timeout 從 25s 拉到 60s:長回應的生成時間可能 30-40s,
+                # 25s 容易在中途逾時返回 None,使用者只看到 fallback 摘要。
                 answer = call_llm_api(
                     st.session_state.llm_provider,
                     st.session_state.llm_key,
@@ -1669,8 +1676,8 @@ def _render_chat_panel() -> None:
                     st.session_state.llm_model,
                     st.session_state.llm_base_url,
                     system=ANTI_HALLUCINATION_SYSTEM,
-                    max_tokens=4096,
-                    timeout=25,
+                    max_tokens=8192,
+                    timeout=60,
                 )
 
             if not answer:

@@ -1013,15 +1013,19 @@ AGENT_STAGE_CSS = """
   box-shadow: 0 0 0 2px rgba(255, 71, 87, 0.35) !important;
   outline: none !important;
 }
-/* Chat input inside the floating panel.
-   `margin-top: auto` + `flex-shrink: 0` + `order: 99` guarantee the input
-   is always pinned to the very bottom of the flex column, regardless of
-   how short the conversation history is or how Streamlit re-orders the
-   DOM after a rerun. */
+/* Chat input inside the floating panel — position:absolute approach.
+   過去用 flex-column + margin-top:auto + order:99,但 Streamlit 在
+   .st-key-floating_chat 與 stChatInput 之間插了 stVerticalBlockBorderWrapper
+   等包裝,flex 屬性 propagation 失效 → 輸入框會浮在 history 後面而非釘底。
+   改用 position:absolute 直接以 panel 為定位錨點,跨 Streamlit 版本最穩定。 */
 .st-key-floating_chat [data-testid="stChatInput"] {
-  margin-top: auto !important;
-  flex-shrink: 0 !important;
-  order: 99 !important;
+  position: absolute !important;
+  bottom: 14px !important;            /* 與 panel padding-bottom:18px 對齊微調 */
+  left: 16px !important;
+  right: 16px !important;
+  margin: 0 !important;
+  z-index: 5 !important;
+  background: rgba(10, 18, 40, 0.97) !important;  /* 不透明背景遮住下面 history 滾上來的內容 */
 }
 .st-key-floating_chat [data-testid="stChatInput"] textarea {
   min-height: 44px !important;
@@ -1038,21 +1042,18 @@ AGENT_STAGE_CSS = """
   width: 34px !important;
   height: 34px !important;
 }
-/* Inner scroll container: only the history scrolls, the contact bar above
-   and the chat input below stay pinned. `flex: 1` claims all remaining
-   vertical space; `min-height: 0` lets overflow-y actually engage inside
-   a flex parent. Inner flex with `justify-content: flex-end` anchors the
-   welcome message (and short conversations) to the bottom, right above
-   the input — matching LINE's UX. */
+/* History 容器:現在 chat_input 是 absolute,history 用 padding-bottom 預留
+   ~64px(input 44 + padding 上下各 10 + 一點呼吸) 避免最新訊息被輸入框遮住。
+   justify-content: flex-end 讓歡迎訊息與短對話貼在 input 上方。 */
 .st-key-chat_history {
   flex: 1 1 auto !important;
   min-height: 0 !important;
   overflow-y: auto !important;
   padding-right: 4px;
+  padding-bottom: 64px !important;
   display: flex !important;
   flex-direction: column !important;
   justify-content: flex-end !important;
-  order: 1 !important;
 }
 .st-key-chat_history::-webkit-scrollbar { width: 6px; }
 .st-key-chat_history::-webkit-scrollbar-thumb { background: rgba(0, 217, 255, 0.25); border-radius: 3px; }
