@@ -27,23 +27,51 @@ DARK_THEME_CSS = """
   --text-muted: #4a5266;
 }
 
-/* Hide default Streamlit chrome */
-#MainMenu        { visibility: hidden; }
+/* Hide default Streamlit chrome — but keep Deploy / Manage app / hamburger menu.
+   過去把 #MainMenu 整個 visibility: hidden,結果連 Deploy 按鈕、Share 與 hamburger
+   menu(內含 Rerun / Print / Settings / Clear cache 等實用項目)都消失,使用者問
+   「為什麼右上角沒按鈕」。改成只藏 footer,header 區的按鈕全部保留可見。 */
 footer           { visibility: hidden; }
 
-/* Header: transparent dark bar, keep Deploy button */
+/* Header: completely transparent — the dark bar at the very top looked like a
+   permanent floating block over the content. We keep the toolbar buttons
+   (Deploy etc.) functional but the bar itself blends into the page. */
 header[data-testid="stHeader"] {
-  background: rgba(4, 6, 15, 0.92) !important;
-  border-bottom: 1px solid rgba(0, 217, 255, 0.10);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: transparent !important;
+  border-bottom: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
 }
+[data-testid="stDecoration"] { display: none !important; }
 
-/* Hide the screencast / record button, keep only Deploy */
+/* Hide only the screencast / record button — Deploy / Share / Manage app 仍保留可見。
+   過去的寫法是 `stToolbarActions > div:not(:last-child)`,Streamlit 1.40+ 後
+   toolbar 子元素順序改變,Deploy 不再保證是 :last-child,結果整個 Deploy 區被誤殺。
+   改成 testid / aria-label 精準鎖定螢幕錄影按鈕,不再用位置 selector。 */
 [data-testid="stScreenCastRecordButton"],
 button[aria-label="Record a screencast"],
-button[aria-label="Stop recording"],
-[data-testid="stToolbarActions"] > div:not(:last-child) { display: none !important; }
+button[aria-label="Stop recording"] {
+  display: none !important;
+}
+
+/* Streamlit 在 rerun / 長阻塞時會把 .stApp 整個透明度降下來給「running」視覺
+   提示,搭配 chat fragment 的 LLM 阻塞(25-60s),使用者覺得「網頁暗掉」。
+   既然我們已經把聊天包進 @st.fragment,主 app 不會被 rerun;這裡再多一層
+   保險,把任何 running 狀態的透明度全部鎖回 1。 */
+.stApp,
+.stApp[data-running="true"],
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"][data-running="true"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"] {
+  opacity: 1 !important;
+  filter: none !important;
+}
+/* 右上角 "Running..." 狀態提示也藏掉,讓 fragment 內的 LLM 呼叫不要造成
+   整頁右上閃一個跑步小人。fragment 內部仍會自己顯示 typing dots,使用者
+   能清楚知道 AI 在思考。 */
+[data-testid="stStatusWidget"] { display: none !important; }
 
 /* Background — deep blue-black with two distant nebulae */
 .stApp {
@@ -1013,11 +1041,13 @@ AGENT_STAGE_CSS = """
   box-shadow: 0 0 0 2px rgba(255, 71, 87, 0.35) !important;
   outline: none !important;
 }
-/* Chat input inside the floating panel — position:absolute approach.
-   過去用 flex-column + margin-top:auto + order:99,但 Streamlit 在
-   .st-key-floating_chat 與 stChatInput 之間插了 stVerticalBlockBorderWrapper
-   等包裝,flex 屬性 propagation 失效 → 輸入框會浮在 history 後面而非釘底。
-   改用 position:absolute 直接以 panel 為定位錨點,跨 Streamlit 版本最穩定。 */
+/* Chat input inside the floating panel — pin to bottom of panel.
+   Streamlit 1.40+ 把每個帶 key 的 widget 包進 .st-key-<key> wrapper,
+   所以 st.chat_input(key="floating_chat_input") 會多一層 .st-key-floating_chat_input。
+   過去只對 [data-testid="stChatInput"] 套 absolute,但外層 .st-key-floating_chat_input
+   仍佔據 normal flow 的位置(在 history 之後),導致整塊輸入區飄在 panel 中間。
+   修法:把 absolute 套在最外層的 keyed wrapper,內層回歸 static flow。 */
+.st-key-floating_chat .st-key-floating_chat_input,
 .st-key-floating_chat [data-testid="stChatInput"] {
   position: absolute !important;
   bottom: 14px !important;            /* 與 panel padding-bottom:18px 對齊微調 */
@@ -1026,6 +1056,14 @@ AGENT_STAGE_CSS = """
   margin: 0 !important;
   z-index: 5 !important;
   background: rgba(10, 18, 40, 0.97) !important;  /* 不透明背景遮住下面 history 滾上來的內容 */
+}
+/* 內層 stChatInput 若也有 keyed wrapper 在外面包著,就讓內層回到 static 不要重複定位 */
+.st-key-floating_chat .st-key-floating_chat_input [data-testid="stChatInput"] {
+  position: static !important;
+  bottom: auto !important;
+  left: auto !important;
+  right: auto !important;
+  background: transparent !important;
 }
 .st-key-floating_chat [data-testid="stChatInput"] textarea {
   min-height: 44px !important;
@@ -1042,21 +1080,39 @@ AGENT_STAGE_CSS = """
   width: 34px !important;
   height: 34px !important;
 }
-/* History 容器:現在 chat_input 是 absolute,history 用 padding-bottom 預留
-   ~64px(input 44 + padding 上下各 10 + 一點呼吸) 避免最新訊息被輸入框遮住。
-   justify-content: flex-end 讓歡迎訊息與短對話貼在 input 上方。 */
+/* Streamlit 會在 .st-key-floating_chat 跟 .st-key-chat_history 之間塞一層
+   stVerticalBlock,如果該 wrapper 不是 flex child,內層的 flex: 1 + overflow: auto
+   就沒空間可吃 → 訊息會穿出去蓋到輸入框(就是使用者看到的「訊息被截掉、跟 input 重疊」)。
+   修法:把 panel 內所有 stVerticalBlock 也設成 flex column + min-height: 0,
+   讓 flex 行為能一路傳遞到 chat_history。 */
+.st-key-floating_chat > [data-testid="stVerticalBlock"],
+.st-key-floating_chat > [data-testid="stVerticalBlockBorderWrapper"],
+.st-key-floating_chat > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"] {
+  flex: 1 1 auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  min-height: 0 !important;
+  width: 100% !important;
+}
+/* History 容器 — 真正會滾動的層。需要:
+     • flex: 1 1 auto + min-height: 0  ← 才會被擠到剩下的空間並可縮
+     • overflow-y: auto                 ← 內容超過時才出現捲軸
+     • padding-bottom: 64px             ← 給 absolute 在底部的 chat_input 預留空間
+   注意:不能再用 justify-content: flex-end — 對短對話貼底是好看,但訊息一多
+   就會反過來把上面剪掉(flex-end + overflow: auto 在 webkit 有 bug)。 */
 .st-key-chat_history {
   flex: 1 1 auto !important;
   min-height: 0 !important;
+  max-height: 100% !important;
   overflow-y: auto !important;
-  padding-right: 4px;
+  overflow-x: hidden !important;
+  padding-right: 6px;
   padding-bottom: 64px !important;
-  display: flex !important;
-  flex-direction: column !important;
-  justify-content: flex-end !important;
+  display: block !important;
 }
 .st-key-chat_history::-webkit-scrollbar { width: 6px; }
 .st-key-chat_history::-webkit-scrollbar-thumb { background: rgba(0, 217, 255, 0.25); border-radius: 3px; }
+.st-key-chat_history::-webkit-scrollbar-thumb:hover { background: rgba(0, 217, 255, 0.45); }
 .st-key-chat_history::-webkit-scrollbar-track { background: transparent; }
 
 /* Per-message references row — under each bot reply, indented to align with

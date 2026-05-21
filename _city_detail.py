@@ -24,6 +24,7 @@ import streamlit as st
 from data import (
     CITIES, CITY_BY_ID,
     aqi_to_level,
+    parse_agent_c_per_city,
 )
 # 從 charts 模組匯入:make_aqi_gauge = AQI 圓形儀表板圖;PALETTE = 統一配色盤
 from charts import (
@@ -220,8 +221,12 @@ def render_city_detail(
 
     # ── Row 3:預警員(LLM)給的個人化健康建議 ───────────────────────────────
     st.markdown("<div class='eyebrow' style='margin-top:1rem;'>🦞 預警員給此城市的建議</div>", unsafe_allow_html=True)
-    # 從 session_state 取出預警員 LLM 的輸出;若 Pipeline 未跑或 LLM 失敗則為空字串
-    advisory_text = st.session_state.get("agent_c_advisories", "")
+    # 從 session_state 取出預警員 LLM 的整段輸出(sentinel 格式 `<<<CITY:NAME>>>...`),
+    # 用 parse_agent_c_per_city 拆成 {city: advice} 後挑出當前這座城市的段落。
+    # 改版前是直接把整段 LLM 輸出印出來,結果使用者看到的是「全部城市」的建議混在一起。
+    full_advisory = st.session_state.get("agent_c_advisories", "")
+    per_city = parse_agent_c_per_city(full_advisory)
+    advisory_text = per_city.get(city["name"], "")
     if advisory_text:
         # 已有 LLM 建議:用綠色 glass-card 渲染(對應預警員的主題色 #00e676)
         # `white-space:pre-wrap` 保留 LLM 輸出中的換行,讓段落格式不會被壓平

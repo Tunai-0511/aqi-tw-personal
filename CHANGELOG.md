@@ -12,13 +12,6 @@
 
 ---
 
-## [2026-05-21] 移除側邊欄 Discord 推送功能 (by Einosensokami)
-
-### Removed
-- **app.py 側邊欄 Discord 推送區塊**([app.py:1348-1379](app.py)) — 移除 Discord Webhook URL 輸入、測試按鈕及相關說明文字。
-
----
-
 ## [2026-05-21] 個人訂閱按鈕重構:將「產生指令」Form 與「直接註冊」按鈕脫鉤 (by Einosensokami)
 
 ### Fixed

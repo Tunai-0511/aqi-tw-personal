@@ -45,3 +45,7 @@ lobster_aqi.sqlite
 # RAG knowledge base downloaded PDFs
 openclaw_skills/aqi-knowledge/docs/*.pdf
 openclaw_skills/aqi-knowledge/docs/*.html
+
+# IDE / local tool settings
+.claude/
+

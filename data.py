@@ -399,6 +399,58 @@ USER_ICD10_OPTIONS = [
 ]
 
 
+# ─── Agent C 個人化建議 parser ──────────────────────────────────────────────
+# Agent C 在「使用者有填個人健康檔案」時,prompt 會要求 LLM 用
+#   <<<CITY:台北市>>>
+#   …針對該城市給 3-4 句個人化建議…
+#   <<<CITY:新北市>>>
+#   …
+# 的格式輸出。這個 helper 把整段字串 parse 成 {city_name: advice_text} 的 dict,
+# 供 Section 07 (city alert card 內的 expander) 與 _city_detail.py 各取所需。
+#
+# 為什麼用 <<<CITY:NAME>>> 而不是純 markdown `## CITY` heading?
+# - markdown heading 容易被 LLM 寫成 `### `、`**台北市**`、`# 台北市:` 等變體,
+#   parsing 一不小心就 mismatch 漏資料。
+# - <<<CITY:…>>> 是「自訂 sentinel」,LLM 看到都會原樣輸出,parse 穩定度高。
+
+def parse_agent_c_per_city(text: str) -> dict[str, str]:
+    """把 Agent C 輸出依 `<<<CITY:NAME>>>` 切成 {city_name: advice_text} dict。
+
+    容錯設計:
+      - 空字串 / None → 回 {}
+      - 找不到任何 sentinel → 回 {}(rendering 端會 fallback 到 generic advice)
+      - city name 前後有空白 → strip
+      - advice 內含換行、列表、emoji → 原樣保留
+      - 最後一個 city 的 advice 沒有 trailing sentinel → 仍正確取到結尾
+
+    Parameters
+    ----------
+    text : str
+        Agent C 的原始 LLM 輸出(可能含 markdown / 多個 sentinel)
+
+    Returns
+    -------
+    dict[str, str]
+        key = 城市名(例如「台北市」),value = 該城市的個人化建議(strip 過)
+    """
+    import re as _re
+    if not text or not text.strip():
+        return {}
+    # 切割點:行首或行中的 <<<CITY:XXX>>>。re.split 會保留 capture group 內容,
+    # 結果排列:[before_first, name1, body1, name2, body2, ...]
+    parts = _re.split(r"<<<CITY:\s*([^>]+?)\s*>>>", text)
+    if len(parts) < 3:
+        return {}  # 沒有任何 sentinel,parse 失敗
+    out: dict[str, str] = {}
+    # parts[0] 是第一個 sentinel 之前的內容(通常是空白或 LLM 加的前言),忽略
+    for i in range(1, len(parts) - 1, 2):
+        name = parts[i].strip()
+        body = parts[i + 1].strip()
+        if name and body:
+            out[name] = body
+    return out
+
+
 # ─── 3-agent Pipeline 設定 (Agent Pipeline Configuration) ──────────────────
 
 
@@ -721,17 +773,30 @@ def generate_real_timeseries(
         欄位:timestamp, city_id, city, region, aqi, PM2.5, PM10, O3, NO2, SO2, CO, risk
         無論走哪一條路徑,都會回傳同樣 schema 的 DataFrame
     """
-    # 1. EPA 歷史測站(最權威)
+    # 1. EPA 歷史測站(最權威)— 但會檢查資料新鮮度,過期就改用 CAMS。
+    # 背景:EPA aqx_p_488 偶爾會落後 10+ 小時(資料集 publish 延遲、跨日凌晨等)。
+    # 過去只要 endpoint 回得出東西就直接用,結果使用者看到「落後 901 分鐘」的可怕標籤。
+    # 修法:若 EPA 最新一筆 > STALE_HOURS 小時前,直接 fallback 到 CAMS。
+    STALE_HOURS = 3
+    epa_hist = None
     if epa_key:
         epa_hist = fetch_epa_historical(epa_key, hours_back=hours_back)
         if epa_hist is not None and not epa_hist.empty:
-            return epa_hist
+            latest = pd.Timestamp(epa_hist["timestamp"].max())
+            age_h = (pd.Timestamp(datetime.now()) - latest).total_seconds() / 3600
+            if age_h <= STALE_HOURS:
+                return epa_hist
+            # EPA 太舊 — 留著當 cams 失敗時的最後備案,先試 CAMS
 
     # 2. CAMS 大氣化學模式(免金鑰,涵蓋全境)
     # 注意:CAMS 一次回 past_days + forecast_days 的資料,因此要 filter 出 <= now 的歷史段
     cams = fetch_open_meteo_aq_batch(CITIES, past_days=1, forecast_days=0)
     if cams is not None and not cams.empty:
         return cams[cams["timestamp"] <= pd.Timestamp(datetime.now())].copy()
+
+    # CAMS 也失敗 — 不得已用過期的 EPA 資料(總比沒資料好)
+    if epa_hist is not None and not epa_hist.empty:
+        return epa_hist
 
     # 3. Fallback:用日夜模式重建歷史曲線(以當下 AQI 為錨點)
     now = datetime.now()
