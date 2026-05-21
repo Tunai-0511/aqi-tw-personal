@@ -1343,43 +1343,6 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    st.markdown(" ")
-
-    # ── Discord Webhook ────────────────────────────────────────────────────
-    st.markdown("<div class='eyebrow'>Discord 推送</div>", unsafe_allow_html=True)
-    with st.container(key="masked_discord_url"):
-        st.session_state.discord_webhook_url = st.text_input(
-            "Discord Webhook URL",
-            value=st.session_state.discord_webhook_url,
-            type="default",
-            placeholder="https://discord.com/api/webhooks/...",
-            label_visibility="collapsed",
-            help="頻道設定 → 整合 → Webhook → 複製 URL。Pipeline 跑完會 POST 摘要到該頻道。",
-        )
-    if st.button("🧪 測試 Discord", use_container_width=True, key="discord_test_btn"):
-        snap = st.session_state.snapshot
-        if snap is None or snap.empty:
-            st.warning("尚無 snapshot 可送 — 請先跑一次 Pipeline，再來測 Discord")
-        else:
-            ok, msg = send_discord_webhook(
-                st.session_state.discord_webhook_url,
-                snap,
-                None,  # Critic agent removed in 3-agent refactor
-                st.session_state.data_mode,
-            )
-            if ok:
-                st.success(f"✓ Discord 測試成功 · {msg}")
-            else:
-                st.error(f"❌ {msg}")
-    st.markdown(
-        "<div class='tiny muted' style='line-height:1.55; margin-top:0.3rem;'>"
-        "📡 留空則略過推送。URL 包含密鑰，請勿外流。"
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(" ")
-
     # ── 本機時序快取狀態 ─────────────────────────────────────────────────
     _tsdb_stats = tsdb.stats()
     last_w = _tsdb_stats["last_write"] or "—"
