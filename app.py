@@ -862,7 +862,7 @@ def run_pipeline(
             return None, "未填 LLM 金鑰"
         resp = call_llm_api(
             llm_provider, llm_key, prompt, llm_model, llm_base_url,
-            system=AGENT_SYSTEM, max_tokens=max_tokens, timeout=25,
+            system=AGENT_SYSTEM, max_tokens=max_tokens, timeout=120,
         )
         if resp:
             return resp, ""

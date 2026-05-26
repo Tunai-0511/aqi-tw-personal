@@ -12,6 +12,16 @@
 
 ---
 
+## [2026-05-26] 預警員個人化建議超時修復:timeout 25s → 120s
+
+### Fixed
+- **預警員(Agent C)生成 20 城市個人化建議逾時**([app.py:865](app.py)) — Agent C 需為每個城市輸出 3-4 句個人化建議,`max_tokens=6144` 本身夠大,但 `timeout=25` 秒在長輸出時根本來不及等 LLM 生成完就斷了。修復:
+  - `_agent_llm` 的 `timeout=25` → `timeout=120`
+  - 20 城市 × ~300 token/城市 = ~6000 token,Claude 生成時間約 60-90 秒,120 秒綽綽有餘
+  - 分析師(Agent B)因回應較短,維持 25 秒 timeout 不變
+
+---
+
 ## [2026-05-21] 個人訂閱按鈕重構:將「產生指令」Form 與「直接註冊」按鈕脫鉤 (by Einosensokami)
 
 ### Fixed
