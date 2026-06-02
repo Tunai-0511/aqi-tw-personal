@@ -93,3 +93,61 @@ LobsterAQI 的 `analyst` / `advisor` 在 RAG 模式下會引用以下文獻。�
 ```
 
 不要編造 chapter / page number — 只在確定的時候才寫。
+
+---
+
+## 代理人外部工具 — Twinkle Hub MCP（選配，非核心資料源）
+
+> 這一節跟上面的 RAG 文獻**性質不同**：它不是要 ingest 的 PDF / HTML，而是一個讓
+> OpenClaw 代理人「即時查詢」的 MCP 工具。儀表板的所有數字仍來自 `data.py`
+> （環境部 + Open-Meteo CAMS + 民生公共物聯網 + LASS / AirBox），**完全不受此工具影響**。
+
+**Twinkle Hub**（https://hub.twinkleai.tw/）是「MCP-as-a-Service」：一把可撤銷的
+`sk-...` 金鑰，讓 MCP 客戶端用自然語言查詢台灣政府開放資料（data.gov.tw，約 4.9 萬個
+資料集）。我們把它接給 `analyst` / `advisor`，**只當作補充背景脈絡的工具**——查當下
+天氣 / 鋒面 / 降雨 / 颱風 / 沙塵 / 環境與健康公告，用來「解釋」空品為什麼變化。
+
+### 註冊方式（一次性）
+
+雙擊執行 `scripts/setup_twinkle_hub.bat`，貼上在 https://hub.twinkleai.tw/login
+（Google / GitHub 登入）取得的 `sk-...` 金鑰即可。腳本實際做的事：
+
+```
+openclaw config set mcp.servers.twinkle-hub.url "https://api.twinkleai.tw/mcp/"
+openclaw config set mcp.servers.twinkle-hub.transport "streamable-http"
+openclaw config set mcp.servers.twinkle-hub.headers.Authorization "Bearer sk-..."
+```
+
+寫完設定後需**重啟 gateway**（`openclaw gateway stop` 再 `start`，或前景模式 Ctrl+C
+後重跑 `openclaw gateway run`）才會生效。MCP 伺服器是**全域**設定，`--session isolated`
+的 cron 排程會自動繼承，因此 `app.py` 與 `scripts/setup_cron.bat` 的 `openclaw cron add`
+指令**不需要改**。
+
+### 工具範圍
+
+Hub 提供 5 個 `opendata-*` 工具 + 32 個 `twtools-*` 公用工具（身分證 / 統編 / 民國年
+換算等）。代理人**只用 `opendata-*`**；`twtools-*` 與空品無關，已在 SOUL.md 指示忽略。
+（此版 OpenClaw 2026.5.7 沒有 per-server 工具過濾參數，因此靠代理人守則約束，而非設定。）
+
+### 重要警語（已寫進 analyst / advisor 的 SOUL.md + IDENTITY.md）
+
+- **不是獨立量測**：Hub 的 AQI 本質仍是環境部來源，數字會跟 `data.py` 直接抓的一樣。
+  代理人只拿它補質性背景，**絕不**用 Hub 的數字覆蓋訊息裡既有的 AQI / PM2.5。
+- **Alpha、會降級**：每天 22:00–07:00（台灣時間）維護、可能不穩、無 SLA、未來改為
+  逐工具預付計費。代理人被要求**優雅降級**——工具逾時 / 報錯就直接用 prompt 裡的儀表板
+  數據完成摘要，不卡住、不重試到死。
+- **隱私紅線**：訂閱推播會把使用者個人健康檔案（年齡 / BMI / 診斷 / 病歷）內嵌進 prompt。
+  代理人被明確禁止把這些送進 Hub 查詢，**只用公開的地點 / 天氣 / 環境關鍵字**。
+
+### 品管員（critic）的配套判定
+
+`critic`（agent-k，反幻覺審稿，**僅存在於部署中的代理人工作區、repo 未收錄**）的 SOUL.md
+也加了一條判定規則：分析師若引用 `opendata-*` 來的**質性**天氣 / 環境背景（鋒面 / 颱風 /
+沙塵等）**不算幻覺、不扣分**；但 AQI / PM2.5 **數字**仍以快照為準，Hub 數字覆蓋快照照樣
+重扣。沒這條，critic 會把合法的天氣脈絡誤判成幻覺而退稿。
+
+### 授權與移除
+
+- Twinkle Hub 服務：見 https://hub.twinkleai.tw/ 的條款（alpha 階段、未來轉付費）。
+- 底層資料：data.gov.tw，多數採 [台灣政府資料開放授權條款](https://data.gov.tw/license)。
+- 移除工具：`openclaw mcp unset twinkle-hub`（再重啟 gateway）。

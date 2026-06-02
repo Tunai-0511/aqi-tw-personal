@@ -35,7 +35,7 @@ openclaw cron add ^
     --tz "Asia/Taipei" ^
     --session isolated ^
     --agent analyst ^
-    --message "請拉取台灣即時 AQI 並用 3 段繁體中文摘要：① 全國概況與最高/最低城市 ② 對敏感族群的建議 ③ 未來 6 小時研判。引用 WHO/EPA 標準。每段 2-3 句。" ^
+    --message "請拉取台灣即時 AQI 並用 3 段繁體中文摘要：① 全國概況與最高/最低城市 ② 對敏感族群的建議 ③ 未來 6 小時研判。引用 WHO/EPA 標準。每段 2-3 句。若 twinkle-hub 工具可用，可順道查天氣/鋒面/颱風是否影響空品再下研判；查不到就照既有數據完成，不要卡住。" ^
     --announce ^
     --channel discord ^
     --to "channel:%DISCORD_CHANNEL%"

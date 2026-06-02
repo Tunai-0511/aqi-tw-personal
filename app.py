@@ -97,8 +97,8 @@ st.set_page_config(
     layout="wide",                        # 寬版佈局,讓圖表有足夠空間
     initial_sidebar_state="expanded",     # 預設展開 sidebar(設定區)
 )
-# 注入兩段 CSS:深色主題 + 像素辦公室動畫
-# `unsafe_allow_html=True` 允許 raw HTML(預設 Streamlit 會 escape)
+# 注入 CSS:深色主題基底 + 像素辦公室動畫。
+# `unsafe_allow_html=True` 允許 raw HTML(預設 Streamlit 會 escape)。
 st.markdown(DARK_THEME_CSS, unsafe_allow_html=True)
 st.markdown(AGENT_STAGE_CSS, unsafe_allow_html=True)
 
@@ -1193,6 +1193,7 @@ with st.sidebar:
         "</div></div>",
         unsafe_allow_html=True,
     )
+
     st.markdown("---")
 
     # Data source info — always tries real EPA + Open-Meteo, auto-falls back
@@ -1790,11 +1791,25 @@ def _render_chat_panel() -> None:
     )
 
     def _draw(show_typing: bool) -> None:
-        # Empty state — show centered greeting
+        # Empty state — 用「助理主動打招呼」的氣泡呈現(比一行置中灰字更像真人/LINE)。
+        # 依 Pipeline 是否就緒給不同開場白:就緒→邀請發問;未就緒→引導先啟動。
         if not st.session_state.chat_history and not show_typing:
+            today_label = datetime.now().strftime("%Y/%m/%d")
+            greeting = (
+                "哈囉 👋 我是 LobsterAQI 小助理。\n"
+                "可以問我各城市的即時空品、PM2.5，或今天適不適合出門運動～"
+            ) if pipeline_ready else (
+                "哈囉 👋 我是 LobsterAQI 小助理。\n"
+                "先點頁面上方的「啟動 Pipeline」抓即時資料,我就能開始幫你看空氣品質囉。"
+            )
+            greeting_html = escape(greeting).replace("\n", "<br>")
             history_ph.markdown(
-                "<div class='tiny muted' style='text-align:center; padding:1.2rem 0.5rem;'>"
-                "👋 我是 LobsterAQI AI 助理。問我空氣品質的問題吧。"
+                "<div class='line-chat-stream'>"
+                f"<div class='line-date-separator'><span>{today_label}</span></div>"
+                "<div class='line-row line-row-bot'>"
+                "<div class='line-avatar line-avatar-bot'>🦞</div>"
+                f"<div class='line-bubble line-bubble-bot'>{greeting_html}</div>"
+                "</div>"
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -1914,6 +1929,39 @@ def _render_chat_panel() -> None:
     _draw(show_typing=False)
 
 
+def _scroll_chat_to_latest() -> None:
+    """把浮動聊天面板的歷史容器瞬間捲到最新一則(LINE:永遠先看到最新訊息)。
+
+    為什麼用 components.html 而不是 st.markdown:
+      `st.markdown(unsafe_allow_html=True)` 會把 <script> 過濾掉,腳本根本不會跑。
+      components.html 會建一個 same-origin 的 iframe,iframe 內的腳本能透過
+      `window.parent.document` 觸及主文件,設定 `.st-key-chat_history` 的 scrollTop。
+      height=0 → iframe 不佔可見空間(渲染在主流程末端、畫面外,不影響 panel 版面)。
+
+    時機:每次 fragment rerun(開面板 / 送出訊息 / 收到回覆)都會重新執行此函式 →
+    iframe 重建 → 腳本再跑一次 → 自動跟到最新。用兩個 requestAnimationFrame 等
+    這一幀 DOM paint 完(bubble 都進 DOM)再讀 scrollHeight,值才是最終高度。
+    捲動用瀏覽器預設的「瞬間」行為(非 smooth),避免使用者在意的動畫延遲感。
+    """
+    from streamlit.components.v1 import html as _components_html
+    _components_html(
+        """
+        <script>
+          (function () {
+            const doc = window.parent && window.parent.document;
+            if (!doc) return;
+            const scrollNow = () => {
+              const h = doc.querySelector('.st-key-chat_history');
+              if (h) { h.scrollTop = h.scrollHeight; }
+            };
+            requestAnimationFrame(() => requestAnimationFrame(scrollNow));
+          })();
+        </script>
+        """,
+        height=0,
+    )
+
+
 # ── Floating chat: either collapsed FAB or expanded panel (never both) ──────
 # 包進 @st.fragment 讓「使用者送出訊息 → 呼叫 LLM(25-60s 阻塞)→ 寫入回覆」
 # 整段流程只 rerun 這個 fragment,不影響整個 app。沒有 fragment 的話,LLM
@@ -1949,6 +1997,10 @@ def _floating_chat_fragment() -> None:
                 st.session_state.chat_expanded = False
                 st.rerun()
             _render_chat_panel()
+        # 注意:故意放在 `with st.container(key="floating_chat")` 區塊「之外」,
+        # 這樣捲動用的 0 高度 iframe 不會變成 panel 的 flex 子元素去擾亂版面,
+        # 它只渲染在主流程末端(畫面外)並透過 window.parent 捲動歷史容器。
+        _scroll_chat_to_latest()
     else:
         with st.container(key="fab_container"):
             if st.button("💬  AI 助理", key="fab_chat_btn", type="secondary"):

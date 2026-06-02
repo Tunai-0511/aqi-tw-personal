@@ -1093,6 +1093,21 @@ AGENT_STAGE_CSS = """
   width: 100% !important;
   gap: 0 !important;
 }
+/* Streamlit 1.56 在 panel 與 chat_history 之間多插了一層 stLayoutWrapper,
+   預設 flex: 0 1 auto → 自己不長高,於是即使 chat_history 本身是 flex: 1,
+   也被父層卡在 ~48px(就是使用者看到的「歷史只剩一行高、輸入框浮在訊息上」)。
+   只針對「包住 chat_history 的那層 wrapper」用 :has() 精準放行長高 —
+   不波及 contact bar / close / chat_input(它們是 panel 直屬子層,未來即使
+   也被 wrapper 包住,沒有 chat_history 後代就不會被這條命中)。
+   這層長高後,flex chain 一路通到底:history 撐滿剩餘空間並自己捲動,
+   chat_input 自然釘在 panel 底部。 */
+.st-key-floating_chat [data-testid="stLayoutWrapper"]:has(.st-key-chat_history) {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  width: 100% !important;
+}
 .st-key-chat_history {
   flex: 1 1 auto !important;
   min-height: 0 !important;
@@ -1102,6 +1117,14 @@ AGENT_STAGE_CSS = """
   padding-bottom: 6px !important;    /* chat_input 現在是 flex 流末項,不需要再預留 */
   display: flex !important;
   flex-direction: column !important;
+}
+/* LINE 風格貼底:對話少的時候,訊息要沉在底部(緊鄰輸入框),不要浮在頂端
+   一片空白。做法是給歷史容器的第一個子元素 margin-top: auto —— 訊息不滿時
+   auto 會吃掉上方所有剩餘空間把內容推到底;訊息溢出需要捲動時,flex 的
+   auto margin 自動歸 0,頂端照樣捲得到,不會吃掉訊息(比 justify-content:
+   flex-end 安全,後者在部分瀏覽器會裁掉溢出內容的頂端)。 */
+.st-key-chat_history > [data-testid="stElementContainer"]:first-child {
+  margin-top: auto !important;
 }
 .st-key-chat_history::-webkit-scrollbar { width: 6px; }
 .st-key-chat_history::-webkit-scrollbar-thumb { background: rgba(0, 217, 255, 0.25); border-radius: 3px; }
