@@ -1138,8 +1138,16 @@ def run_pipeline(
     # We pull CAMS past_days=7 (not 1) so the SQLite cache below has a full
     # week of hourly data to power the weekly-ranking and personal-trend
     # features. Display heatmap still filters to the last 24h.
-    cams_week = fetch_open_meteo_aq_batch(CITIES, past_days=7, forecast_days=0)
+    # 重要:`forecast_days=1` 把「今天」拉進來 — `past_days=N` 只回完整過去日,
+    # 不含今天的任何小時。沒加 forecast_days=1 時,早上 10 點呼叫只會拿到「昨天
+    # 23:00」當最新資料,落後 10+ 小時。filter `<= now` 砍掉預測段(now 之後的
+    # 才是模型預測,now 之前的是 reanalysis 實測 + 數據同化)。
+    cams_week = fetch_open_meteo_aq_batch(CITIES, past_days=7, forecast_days=1)
     cams_hist = None
+    if cams_week is not None and not cams_week.empty:
+        # 砍掉 now 之後的預測段,只留實際發生過的小時。沒這層 filter 會把
+        # 預測資料當實測寫進 SQLite,影響後續的「本週 AQI」、「跟上週比」等統計。
+        cams_week = cams_week[cams_week["timestamp"] <= pd.Timestamp(datetime.now())].copy()
     if cams_week is not None and not cams_week.empty:
         # Persist the full week into SQLite (UPSERT — re-runs don't duplicate)
         try:
@@ -1149,10 +1157,7 @@ def run_pipeline(
             push_log("C", f"⚠ 歷史快取寫入失敗：{type(e).__name__}: {e}", to="DB")
         # Slice the last 24h for the heatmap display
         cutoff = pd.Timestamp(datetime.now()) - pd.Timedelta(hours=25)
-        cams_hist = cams_week[
-            (cams_week["timestamp"] >= cutoff)
-            & (cams_week["timestamp"] <= pd.Timestamp(datetime.now()))
-        ].copy()
+        cams_hist = cams_week[cams_week["timestamp"] >= cutoff].copy()
     st.session_state.cams_ts_df = cams_hist
     _refresh_log()
 
@@ -1915,6 +1920,11 @@ def _render_chat_panel() -> None:
 # 跑那 25-60 秒 Streamlit 會把整頁標成 running 狀態,儀表板的圖表 / 互動元件
 # 全部變灰,使用者抱怨「ai助理回覆時網頁不要暗掉」就是這個。
 # 內部呼叫 st.rerun() 預設 scope="fragment",剛好只重跑這塊。
+#
+# 重要:fragment 真正的「呼叫點」在主腳本最下方(封面區 + Pipeline 觸發檢查之後),
+# 這裡只是 def。把呼叫往後挪,讓 cover/sidebar 的 Pipeline 按鈕按下後,
+# 先設好 `chat_expanded=False`,fragment 才會 render FAB(而非聊天 panel),
+# 避免 Pipeline 30-60 秒阻塞期間,聊天 panel 還掛在畫面上但點 X 無反應。
 @st.fragment
 def _floating_chat_fragment() -> None:
     if st.session_state.chat_expanded:
@@ -1946,7 +1956,8 @@ def _floating_chat_fragment() -> None:
                 st.rerun()
 
 
-_floating_chat_fragment()
+# NOTE: _floating_chat_fragment() is now called near the end of the script
+# (after Pipeline trigger detection). See app.py 下方「Floating chat 呼叫點」。
 
 
 # =============================================================================
@@ -2069,6 +2080,19 @@ if cover_run or run_clicked:
         """,
         height=0,
     )
+
+
+# ── Floating chat 呼叫點 ────────────────────────────────────────────────────
+# 故意放在「Pipeline 觸發檢查之後」、「run_pipeline() 之前」:三個觸發來源
+# (sidebar 按鈕 / 封面按鈕 / 每小時自動更新 fragment)都會在到這一行之前把
+# `_pipeline_should_run` 設為 True。Pipeline 即將阻塞 Python 30-60 秒
+# (LLM 呼叫),那段期間 server 完全卡住,聊天 panel 點 X 沒反應、輸入送不出去。
+# 在這裡把 chat_expanded 設 False,fragment 就會 render FAB(無 panel),
+# Pipeline 結束後使用者再按 FAB 重新打開即可。zero-regression:Pipeline 沒
+# 要跑時這段檢查 no-op。
+if st.session_state.get("_pipeline_should_run"):
+    st.session_state.chat_expanded = False
+_floating_chat_fragment()
 
 
 # =============================================================================
@@ -2284,28 +2308,47 @@ if ts_df is not None and not ts_df.empty:
         else:
             now_local = datetime.now()
             data_dt = pd.Timestamp(hourly_timestamps[-1]).to_pydatetime()
-            delay_min = max(0, int((now_local - data_dt).total_seconds() // 60))
-            if delay_min < 90:
+            history_delay_min = max(0, int((now_local - data_dt).total_seconds() // 60))
+            # ── 兩個獨立的「新鮮度」訊號 ────────────────────────────────────
+            # 1. snapshot 新鮮度(aqx_p_432 即時測站):決定主儀表板的 emoji
+            #    使用者看到的「目前 AQI 55」是這個來源,所以這個 lag 才是真正的
+            #    「現在資料新不新」。aqx_p_432 約每 30 分鐘更新一次,< 60 分鐘 = 正常。
+            # 2. 24h history 新鮮度(aqx_p_488 / CAMS hourly):純粹給時間軸 scrub 用
+            #    這兩個資料集的 publish 延遲常常 4-10 小時(早上 9 點還沒 publish
+            #    凌晨的資料),這是上游 API 的特性,不是 app 的 bug。
+            try:
+                epa_lag = int(snapshot["updated_min_ago"].mean())
+            except Exception:
+                epa_lag = 999
+            # emoji / 顏色 跟著 snapshot lag(實際使用者看到的數據新鮮度)
+            if epa_lag < 60:
                 freshness_emoji, freshness_color = "🟢", "#00e676"
                 freshness_label = "即時"
-            elif delay_min < 240:
+            elif epa_lag < 120:
                 freshness_emoji, freshness_color = "🟡", "#ffd93d"
                 freshness_label = "略有延遲"
             else:
                 freshness_emoji, freshness_color = "🔴", "#ff4757"
                 freshness_label = "資料延遲較久"
-            # EPA 即時測站的平均落後分鐘(來自 snapshot.updated_min_ago)
-            try:
-                epa_lag = int(snapshot["updated_min_ago"].mean())
-                epa_lag_str = f" · EPA 測站平均落後 <b>{epa_lag} 分鐘</b>"
-            except Exception:
-                epa_lag_str = ""
+            # 24h 歷史 lag 用中性顏色描述 — 它只影響時間軸 scrub / 趨勢圖,不影響
+            # 主畫面的當下 AQI。lag 久的時候給 hint 解釋為什麼。
+            if history_delay_min < 90:
+                history_hint = ""
+            elif history_delay_min < 360:
+                history_hint = " <span class='tiny muted'>(上游 EPA aqx_p_488 / CAMS 整點歷史資料的 publish 延遲,屬正常)</span>"
+            else:
+                history_hint = (
+                    " <span class='tiny muted'>(EPA aqx_p_488 與 CAMS 都還沒 publish 凌晨的整點資料,"
+                    "下方時間軸 scrub 拖到最新時間點就是此時刻 — 跟你看到的當下 AQI 無關)</span>"
+                )
             st.markdown(
-                f"<div class='tiny muted' style='text-align:center; margin-top:-0.2rem; margin-bottom:0.4rem;'>"
+                f"<div class='tiny muted' style='text-align:center; margin-top:-0.2rem; margin-bottom:0.4rem; line-height:1.6;'>"
                 f"{freshness_emoji} <b style='color:{freshness_color};'>{freshness_label}</b> · "
                 f"現在 <b>{now_local.strftime('%m/%d %H:%M')}</b> · "
-                f"24h 歷史最新 <b style='color:#00d9ff;'>{time_labels[-1]}</b>"
-                f"(落後 {delay_min} 分鐘){epa_lag_str}"
+                f"EPA 即時測站平均落後 <b>{epa_lag} 分鐘</b>(當下 AQI 來源)"
+                f"<br>"
+                f"24h 歷史最新整點:<b style='color:#00d9ff;'>{time_labels[-1]}</b>"
+                f"(落後 {history_delay_min} 分鐘){history_hint}"
                 f"</div>",
                 unsafe_allow_html=True,
             )

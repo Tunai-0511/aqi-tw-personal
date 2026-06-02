@@ -985,19 +985,21 @@ AGENT_STAGE_CSS = """
   50%     { opacity: 0.55; transform: scale(0.85); }
 }
 
-/* Close button inside the panel: target by widget key for precision.
-   Streamlit (>=1.40) adds class `.st-key-<key>` on the wrapper div of any
-   widget that has a key argument — so .st-key-chat_close hits our ✕ button
-   wrapper exactly, without leaking to chat-input or expander toggle buttons. */
+/* Close button — 不再用 position: absolute。
+   過去用 absolute 釘在 panel 右上角,但 fragment 把 panel unmount 時,absolute
+   子元素會殘留(就是使用者看到「✕ 鈕飄在右下角」的 bug)。
+   改成正常 flex 流元素,用 `align-self: flex-end` 把它推到該列右側、用負 margin-top
+   把它「拉上去」與 contact bar 視覺重疊 → 看起來還是在右上角,但實際上是 normal
+   flow 元素,panel unmount 時 React 一次清乾淨。 */
 .st-key-floating_chat .st-key-chat_close {
-  position: absolute !important;
-  top: 10px !important;
-  right: 10px !important;
+  position: relative !important;
+  align-self: flex-end !important;
+  margin: -52px 4px 0 0 !important;     /* -52: 抬起與 contact bar 同列;右 4: 內縮一點 */
   width: 32px !important;
   height: 32px !important;
-  margin: 0 !important;
+  flex: 0 0 32px !important;
   padding: 0 !important;
-  z-index: 1000 !important;
+  z-index: 10 !important;
 }
 .st-key-floating_chat .st-key-chat_close > div,
 .st-key-floating_chat .st-key-chat_close button {
@@ -1041,29 +1043,20 @@ AGENT_STAGE_CSS = """
   box-shadow: 0 0 0 2px rgba(255, 71, 87, 0.35) !important;
   outline: none !important;
 }
-/* Chat input inside the floating panel — pin to bottom of panel.
-   Streamlit 1.40+ 把每個帶 key 的 widget 包進 .st-key-<key> wrapper,
-   所以 st.chat_input(key="floating_chat_input") 會多一層 .st-key-floating_chat_input。
-   過去只對 [data-testid="stChatInput"] 套 absolute,但外層 .st-key-floating_chat_input
-   仍佔據 normal flow 的位置(在 history 之後),導致整塊輸入區飄在 panel 中間。
-   修法:把 absolute 套在最外層的 keyed wrapper,內層回歸 static flow。 */
+/* Chat input — 不再用 absolute,改成 flex 流末項。
+   過去用 `position: absolute; bottom: 14px;` 釘在 panel 底部,但 Streamlit fragment
+   把 panel 從 chat_expanded=True 切到 False 時,absolute 子元素會「飄出來」
+   殘留在畫面(就是使用者看到的「關閉後輸入框還在右下飄」的 bug)。
+   現在 panel 是 flex column,chat_history 用 flex: 1 撐滿剩餘空間,chat_input
+   自然 sit 在底部 — 行為跟 absolute 一樣穩,但 panel unmount 時 React 一次清光,
+   無殘留。 */
 .st-key-floating_chat .st-key-floating_chat_input,
 .st-key-floating_chat [data-testid="stChatInput"] {
-  position: absolute !important;
-  bottom: 14px !important;            /* 與 panel padding-bottom:18px 對齊微調 */
-  left: 16px !important;
-  right: 16px !important;
-  margin: 0 !important;
-  z-index: 5 !important;
-  background: rgba(10, 18, 40, 0.97) !important;  /* 不透明背景遮住下面 history 滾上來的內容 */
-}
-/* 內層 stChatInput 若也有 keyed wrapper 在外面包著,就讓內層回到 static 不要重複定位 */
-.st-key-floating_chat .st-key-floating_chat_input [data-testid="stChatInput"] {
   position: static !important;
-  bottom: auto !important;
-  left: auto !important;
-  right: auto !important;
+  margin: 0 !important;
+  flex: 0 0 auto !important;            /* 不擠壓 / 不拉伸,維持自然高度 */
   background: transparent !important;
+  width: 100% !important;
 }
 .st-key-floating_chat [data-testid="stChatInput"] textarea {
   min-height: 44px !important;
@@ -1080,35 +1073,35 @@ AGENT_STAGE_CSS = """
   width: 34px !important;
   height: 34px !important;
 }
-/* Streamlit 會在 .st-key-floating_chat 跟 .st-key-chat_history 之間塞一層
-   stVerticalBlock,如果該 wrapper 不是 flex child,內層的 flex: 1 + overflow: auto
-   就沒空間可吃 → 訊息會穿出去蓋到輸入框(就是使用者看到的「訊息被截掉、跟 input 重疊」)。
-   修法:把 panel 內所有 stVerticalBlock 也設成 flex column + min-height: 0,
-   讓 flex 行為能一路傳遞到 chat_history。 */
-.st-key-floating_chat > [data-testid="stVerticalBlock"],
-.st-key-floating_chat > [data-testid="stVerticalBlockBorderWrapper"],
-.st-key-floating_chat > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"] {
-  flex: 1 1 auto !important;
+/* History 容器 — 用 flex chain 撐高度,不再用 position: absolute。
+   為什麼放棄 absolute:absolute 子元素會「脫離」normal flow,Streamlit fragment
+   重 render 把 panel 從 chat_expanded=True 切到 False 時,React 偶爾來不及
+   把 absolute 後代從 DOM 清乾淨 → 使用者看到「panel 關了但訊息泡泡 / X 鈕 /
+   輸入框殘留在畫面右下」(就是使用者回報的 bug)。
+
+   修法:讓 panel 內 *所有* stVerticalBlock / stVerticalBlockBorderWrapper 都套
+   flex column + min-height: 0,flex 行為從 panel 一路傳到 chat_history。
+   chat_history 本身 flex: 1 + overflow-y: auto,自然撐滿剩下空間並產生捲軸。
+   完全沒有 absolute 子元素 → 父層 unmount 時 React 一定清乾淨,無殘留。
+   panel 內部唯一的 absolute 是 chat_input(已預設,且本來就 ok)。 */
+.st-key-floating_chat [data-testid="stVerticalBlock"],
+.st-key-floating_chat [data-testid="stVerticalBlockBorderWrapper"] {
   display: flex !important;
   flex-direction: column !important;
   min-height: 0 !important;
+  flex: 1 1 auto !important;
   width: 100% !important;
+  gap: 0 !important;
 }
-/* History 容器 — 真正會滾動的層。需要:
-     • flex: 1 1 auto + min-height: 0  ← 才會被擠到剩下的空間並可縮
-     • overflow-y: auto                 ← 內容超過時才出現捲軸
-     • padding-bottom: 64px             ← 給 absolute 在底部的 chat_input 預留空間
-   注意:不能再用 justify-content: flex-end — 對短對話貼底是好看,但訊息一多
-   就會反過來把上面剪掉(flex-end + overflow: auto 在 webkit 有 bug)。 */
 .st-key-chat_history {
   flex: 1 1 auto !important;
   min-height: 0 !important;
-  max-height: 100% !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
   padding-right: 6px;
-  padding-bottom: 64px !important;
-  display: block !important;
+  padding-bottom: 6px !important;    /* chat_input 現在是 flex 流末項,不需要再預留 */
+  display: flex !important;
+  flex-direction: column !important;
 }
 .st-key-chat_history::-webkit-scrollbar { width: 6px; }
 .st-key-chat_history::-webkit-scrollbar-thumb { background: rgba(0, 217, 255, 0.25); border-radius: 3px; }

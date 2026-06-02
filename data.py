@@ -751,6 +751,65 @@ def generate_real_snapshot(epa_key: str | None = None) -> tuple[pd.DataFrame | N
     return df, f"成功取得 {len(rows)} 城市即時資料（EPA + Open-Meteo）"
 
 
+def _anchor_history_to_snapshot(
+    ts_df: pd.DataFrame,
+    snapshot: pd.DataFrame,
+    smooth_hours: int = 3,
+) -> pd.DataFrame:
+    """把歷史時序「校準」到 snapshot 的當下值,消除來源系統偏差。
+
+    為什麼需要:即時 AQI 來自 EPA aqx_p_432(測站實測),歷史時序常常來自 CAMS
+    (歐洲哥白尼模式)。兩者的絕對 AQI 數值常有 20-50% 的系統性偏差(CAMS 偏高
+    是已知現象)。使用者拖時間軸從「現在」滑到「1 小時前」,看到 AQI 從 55 跳到
+    93,以為 1 小時內污染暴增,其實只是切換了資料來源。
+
+    校準方法:對每個城市,
+      1. 用最近 `smooth_hours` 小時的歷史中位數當「歷史基準」(用中位數避免被
+         單一極端點拉偏)
+      2. 算比例 factor = snapshot 當前 AQI / 歷史基準
+      3. 用 factor 縮放整條歷史時序(AQI 與主要污染物等比例縮放)
+      4. factor 上下限 0.3 ~ 3.0,避免歷史值是 0 / 極小時的爆炸
+
+    結果:歷史曲線的「形狀」(相對升降)保留,但絕對值被拉到跟 snapshot 同尺度,
+    時間軸 scrub 過去 → 現在的轉換變平滑,沒有 50% 跳變。
+    """
+    if ts_df is None or ts_df.empty or snapshot is None or snapshot.empty:
+        return ts_df
+    if "city_id" not in ts_df.columns or "city_id" not in snapshot.columns:
+        return ts_df
+
+    latest_ts = ts_df["timestamp"].max()
+    cutoff = pd.Timestamp(latest_ts) - pd.Timedelta(hours=smooth_hours)
+    recent = ts_df[ts_df["timestamp"] >= cutoff]
+    recent_aqi = recent.groupby("city_id")["aqi"].median()
+    snapshot_aqi = snapshot.set_index("city_id")["aqi"]
+
+    # 算 per-city factor
+    factors: dict[str, float] = {}
+    for cid in snapshot_aqi.index:
+        snap_v = snapshot_aqi.get(cid)
+        hist_v = recent_aqi.get(cid)
+        if hist_v is None or not pd.notna(hist_v) or hist_v <= 0:
+            factors[cid] = 1.0
+        elif snap_v is None or not pd.notna(snap_v) or snap_v <= 0:
+            factors[cid] = 1.0
+        else:
+            f = float(snap_v) / float(hist_v)
+            factors[cid] = max(0.3, min(3.0, f))
+
+    # 縮放 AQI + 跟它強相關的污染物(PM2.5、PM10 — 主要 AQI 驅動因子)。
+    # O3、NO2、SO2、CO 不縮放:它們是次要,而且 CAMS 跟 EPA 的偏差未必一致。
+    out = ts_df.copy()
+    factor_series = out["city_id"].map(factors).fillna(1.0)
+    for col in ("aqi", "PM2.5", "PM10"):
+        if col in out.columns:
+            out[col] = (out[col] * factor_series).round(1)
+    # 同步重算 risk(若有此欄位)— risk 跟 AQI 線性相關
+    if "risk" in out.columns:
+        out["risk"] = (out["risk"] * factor_series).clip(0, 100).round(1)
+    return out
+
+
 def generate_real_timeseries(
     snapshot: pd.DataFrame,
     hours_back: int = 24,
@@ -777,6 +836,7 @@ def generate_real_timeseries(
     # 背景:EPA aqx_p_488 偶爾會落後 10+ 小時(資料集 publish 延遲、跨日凌晨等)。
     # 過去只要 endpoint 回得出東西就直接用,結果使用者看到「落後 901 分鐘」的可怕標籤。
     # 修法:若 EPA 最新一筆 > STALE_HOURS 小時前,直接 fallback 到 CAMS。
+    # EPA aqx_p_488 跟 snapshot aqx_p_432 都是測站資料(同 scale),不用 anchor。
     STALE_HOURS = 3
     epa_hist = None
     if epa_key:
@@ -788,11 +848,15 @@ def generate_real_timeseries(
                 return epa_hist
             # EPA 太舊 — 留著當 cams 失敗時的最後備案,先試 CAMS
 
-    # 2. CAMS 大氣化學模式(免金鑰,涵蓋全境)
-    # 注意:CAMS 一次回 past_days + forecast_days 的資料,因此要 filter 出 <= now 的歷史段
-    cams = fetch_open_meteo_aq_batch(CITIES, past_days=1, forecast_days=0)
+    # 2. CAMS 大氣化學模式(免金鑰,涵蓋全境)— 模式輸出,跟 EPA 測站有 20-50%
+    # 系統偏差。回傳前用 `_anchor_history_to_snapshot` 校準到 snapshot 的當下值,
+    # 避免「時間軸 scrub 1 小時 AQI 跳 40 點」的假動態。
+    # `forecast_days=1` 把今天從 00:00 拉進來(0-now 為 reanalysis 即時資料,
+    # now 之後才是模型預測)。後面 filter `<= now` 砍掉預測段,只保留實測 + nowcast。
+    cams = fetch_open_meteo_aq_batch(CITIES, past_days=1, forecast_days=1)
     if cams is not None and not cams.empty:
-        return cams[cams["timestamp"] <= pd.Timestamp(datetime.now())].copy()
+        cams_past = cams[cams["timestamp"] <= pd.Timestamp(datetime.now())].copy()
+        return _anchor_history_to_snapshot(cams_past, snapshot)
 
     # CAMS 也失敗 — 不得已用過期的 EPA 資料(總比沒資料好)
     if epa_hist is not None and not epa_hist.empty:

@@ -13,5 +13,10 @@ gatherUsageStats = false  # opt out of Streamlit telemetry
 base = "dark"             # fallback before our custom CSS loads
 
 [client]
-toolbarMode = "minimal"   # hide the record/screencast button, keep Deploy if present
+# toolbarMode = "auto"   ← 預設,Deploy / Share / 漢堡選單(Rerun/Print/Settings/Clear cache)全部顯示
+# 過去設成 "minimal" 導致整個右上角空白(連 Deploy 都被藏掉),使用者問
+# 「為什麼這個專案沒 Deploy 按鈕」就是這個原因。"minimal" 是給嵌入式 / viewer-only
+# 情境用的,本地開發應該用 "auto"。screencast 按鈕由 styles.py 用 CSS 精準藏掉,
+# 不靠 toolbarMode 來控制。
+toolbarMode = "auto"
 showSidebarNavigation = true
