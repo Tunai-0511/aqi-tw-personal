@@ -157,6 +157,36 @@ python hermes_skills\aqi-live\read_export.py 台北市      # 指定城市 + per
 ```
 
 印出的文字就是 Hermes 會貼進 Discord 的內容。匯出檔路徑可用環境變數 `LOBSTER_EXPORT` 覆寫。
+### D. Discord 晚報 `feel 1~5` 打卡 → 健康日誌
+
+如果你的 Discord 晚報提示使用者直接回覆 `feel 1~5`，可以用內建 helper 把分數寫進 Streamlit 已有的 `health_diary` SQLite 表，SECTION · 09 會直接讀到同一份資料：
+
+```bash
+python scripts/record_feel.py "feel 4" --city taichung --outdoor-min 0 --note "Discord 晚報回覆"
+```
+
+支援格式：
+- `feel 1` ~ `feel 5`
+- `Feel: 4`
+- 直接輸入 `4`
+
+資料會寫入：
+- `lobster_aqi.sqlite`
+- table: `health_diary`
+- 欄位：`date`, `city_id`, `symptom_score`, `outdoor_min`, `note`, `created_at`
+
+這個方案不需要 Discord button、interaction endpoint、ngrok 或 Cloudflare Tunnel；使用 Discord 原本輸入框即可。
+
+### E. Discord / LINE 雙向助理（在 Discord @ 分析師問空品）
+
+**Discord 5 步驟**：
+1. 在 [Discord Developer Portal](https://discord.com/developers/applications) 開 Bot，記下 token
+2. `openclaw configure` → Discord → 貼 token
+3. 把 Bot 邀請到你的 Discord server
+4. `openclaw pairing approve discord <code>`
+5. `openclaw agents bind --agent analyst --bind discord:<channel-id>`
+
+**LINE**：OpenClaw 2026.x 對 LINE 支援還在實驗階段，文件不全，可能需要等版本更新。
 
 ### 把 Hermes 設成 Discord bot
 
