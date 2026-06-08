@@ -442,6 +442,36 @@ def total_rows() -> int:
         return int(cur.fetchone()[0])
 
 
+def has_demo_data(city_id: str | None = None) -> bool:
+    """是否存在期末 demo 假資料(`data_mode='demo'`)。
+
+    `scripts/seed_demo_data.py` 灌入的列都標 `data_mode='demo'` 且放在隔離的
+    `source='demo'`。UI 用這個判斷要不要改讀 demo source —— 讓 demo 數據即使在
+    使用者重跑真實 Pipeline(會寫 `source='cams_hourly'`)之後仍然存在、不被覆蓋。
+
+    Parameters
+    ----------
+    city_id : str | None
+        指定城市則只查該城市;None 查是否「任一城市」有 demo 資料。
+
+    Returns
+    -------
+    bool
+    """
+    init()
+    with sqlite3.connect(DB_PATH) as c:
+        if city_id:
+            row = c.execute(
+                "SELECT 1 FROM aqi_snapshots WHERE data_mode='demo' AND city_id=? LIMIT 1",
+                (city_id,),
+            ).fetchone()
+        else:
+            row = c.execute(
+                "SELECT 1 FROM aqi_snapshots WHERE data_mode='demo' LIMIT 1"
+            ).fetchone()
+    return row is not None
+
+
 def last_write_time() -> datetime | None:
     """最近一次寫入的時間;表為空時回 None。
 
@@ -564,12 +594,23 @@ def read_diary(city_id: str | None = None, days: int = 30) -> pd.DataFrame:
     return df
 
 
-def diary_with_aqi(city_id: str, days: int = 30) -> pd.DataFrame:
+def diary_with_aqi(city_id: str, days: int = 30, source: str = "cams_hourly") -> pd.DataFrame:
     """合併「健康日誌」與「該日 AQI 平均」,供散點圖 / 相關性分析使用。
 
     JOIN 邏輯:
       - 健康日誌的 date(例 '2026-05-10')
-      - 對齊 aqi_snapshots 中該日(00:00 ~ 23:59)的 cams_hourly 平均 AQI
+      - 對齊 aqi_snapshots 中該日(00:00 ~ 23:59)、指定 `source` 的平均 AQI
+
+    Parameters
+    ----------
+    city_id : str
+        要查的城市
+    days : int
+        往回看多少天
+    source : str
+        要 JOIN 哪個來源的 AQI,預設 'cams_hourly'(真實歷史)。期末 demo 模式會傳
+        'demo' —— 這樣即使之後跑真實 Pipeline 覆寫 cams_hourly,demo 散點仍對齊
+        到隔離的 demo 資料,不會被洗掉。
 
     Returns
     -------
@@ -585,13 +626,13 @@ def diary_with_aqi(city_id: str, days: int = 30) -> pd.DataFrame:
         "LEFT JOIN aqi_snapshots a "
         "  ON a.city_id = d.city_id "
         "  AND DATE(a.ts) = d.date "
-        "  AND a.source = 'cams_hourly' "
+        "  AND a.source = ? "
         "WHERE d.city_id = ? AND d.date >= ? "
         "GROUP BY d.date, d.symptom_score, d.outdoor_min, d.note "
         "ORDER BY d.date ASC"
     )
     with sqlite3.connect(DB_PATH) as c:
-        df = pd.read_sql_query(q, c, params=[city_id, cutoff])
+        df = pd.read_sql_query(q, c, params=[source, city_id, cutoff])
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df

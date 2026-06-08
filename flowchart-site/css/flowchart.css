@@ -1,0 +1,79 @@
+/* =============================================================================
+ * flowchart.css — 傳統流程圖（直式 · 上→下 + 左側階段帶）
+ * ========================================================================== */
+#flow-view {
+  position: fixed; inset: 0; z-index: 10; overflow: auto;
+  padding: 78px 26px 56px;
+  background:
+    radial-gradient(1300px 760px at 50% -5%, #0b1430 0%, rgba(4,6,15,0) 60%),
+    var(--bg);
+}
+#flow-view.hidden { display: none !important; }
+
+.flow-head { text-align: center; margin: 0 auto 22px; max-width: 760px; }
+.flow-head h1 { font-size: 1.6rem; font-weight: 900; margin: 0; letter-spacing: -0.01em; }
+.flow-head .fc-sub { color: var(--muted); font-weight: 600; font-size: 0.86rem; }
+.flow-head p { color: var(--muted); font-size: 0.9rem; margin: 8px 0 0; line-height: 1.6; }
+.flow-head code { font-family: var(--mono); color: var(--cyan); background: var(--code-bg); padding: 1px 6px; border-radius: 5px; }
+
+#flow-stage { position: relative; margin: 0 auto; }
+
+/* 左側階段帶（代理人分段）*/
+.flow-phase {
+  position: absolute; left: 0; z-index: 1;
+  display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--fc) 11%, var(--panel2));
+  border: 1px solid var(--line); border-left: 4px solid var(--fc);
+}
+.flow-phase span { font-weight: 800; font-size: 0.92rem; color: var(--fc); line-height: 1.45; }
+
+/* 連線層 */
+.flow-svg { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: visible; }
+.fc-line { stroke-linecap: round; stroke-linejoin: round; }
+.fc-line.back { stroke-dasharray: 6 5; }
+.fc-elabel { font-family: var(--mono); font-size: 13px; font-weight: 800; }
+.fc-elabel.yes { fill: var(--green); }
+.fc-elabel.no  { fill: var(--red); }
+
+/* 步驟方框 */
+.flow-box {
+  position: absolute; z-index: 4; display: flex; align-items: center; justify-content: center; text-align: center;
+  border-radius: 11px; border: 1.5px solid var(--fc); background: var(--panel2); color: var(--text);
+  font-weight: 700; font-size: 0.86rem; line-height: 1.32;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.3); transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.flow-box .flow-tx { padding: 4px 8px; position: relative; z-index: 1; }
+.flow-box.clickable { cursor: pointer; }
+.flow-box.clickable:hover { transform: translateY(-2px); box-shadow: 0 11px 26px rgba(0,0,0,0.45); border-color: color-mix(in srgb, var(--fc) 80%, #fff); }
+
+/* 起訖（圓角膠囊）*/
+.flow-box.term {
+  border-radius: 46px; font-weight: 800; font-size: 0.98rem;
+  background: color-mix(in srgb, var(--green) 20%, var(--panel2)); border-color: var(--green); color: var(--green);
+}
+
+/* 判斷（菱形）*/
+.flow-box.dec { background: transparent; border: none; box-shadow: none; }
+.flow-box.dec .dec-shape {
+  position: absolute; width: 70px; height: 70px; left: 50%; top: 50%;
+  transform: translate(-50%,-50%) rotate(45deg);
+  background: color-mix(in srgb, var(--yellow) 17%, var(--panel2));
+  border: 1.5px solid var(--yellow); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+}
+.flow-box.dec .flow-tx { color: var(--yellow); font-size: 0.78rem; font-weight: 800; line-height: 1.2; }
+
+/* pipeline 高亮（執行中階段）*/
+.flow-box.active { border-color: var(--cyan); box-shadow: 0 0 0 2px color-mix(in srgb, var(--cyan) 45%, transparent), 0 8px 22px rgba(0,217,255,0.32); transform: translateY(-2px); }
+.flow-box.term.active { box-shadow: 0 0 0 2px var(--cyan), 0 8px 22px rgba(0,217,255,0.3); }
+.flow-box.dec.active .dec-shape { box-shadow: 0 0 0 2px var(--cyan), 0 8px 22px rgba(0,217,255,0.3); }
+
+/* 淺色主題 */
+body.light #flow-view { background: radial-gradient(1200px 700px at 50% -8%, #e8edf7 0%, rgba(245,247,251,0) 60%), var(--bg); }
+body.light .flow-box { box-shadow: 0 4px 12px rgba(60,80,120,0.12); }
+body.light .fc-line { stroke: #6b7a93 !important; }
+
+@media (max-width: 620px) {
+  #flow-view { padding: 70px 10px 40px; }
+  .flow-head h1 { font-size: 1.3rem; }
+}

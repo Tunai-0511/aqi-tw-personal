@@ -24,7 +24,7 @@
    - `generate_real_snapshot()`:整合上述 API 產出真實的「當下快照」
    - `generate_real_timeseries()`:整合產出真實的「24h 時序」
    - `call_llm_api()`:呼叫各家 LLM(Anthropic / Gemini / MiniMax / OpenAI / 自訂)
-   - `send_discord_webhook()`:Pipeline 完成後推送摘要到 Discord
+   - `build_hermes_payload()`:組 Pipeline 結果成 JSON,供 Hermes(Discord bot)拉取
 
 備註: 此檔案早期是純 mock 生成器(docstring 寫的就是這樣),後來逐步加入
 真實 API 後,mock 變成「fallback 安全網」而非主要路徑。`app.py:603-609`
@@ -1339,68 +1339,90 @@ def fetch_open_meteo_aq_batch(
     return pd.DataFrame(rows) if rows else None
 
 
-def send_discord_webhook(
-    url: str,
-    snapshot: pd.DataFrame,
-    critic_score: float | None,
-    data_mode: str = "real",
-) -> tuple[bool, str]:
-    """Pipeline 跑完後,把摘要 POST 到 Discord channel webhook。
+def build_hermes_payload(
+    snapshot_df: pd.DataFrame,
+    analysis: str,
+    advisories_raw: str,
+    data_mode: str,
+    user_city: str,
+    threshold: int,
+    user_profile: dict | None = None,
+    generated_at: str | None = None,
+) -> dict:
+    """組裝給 Hermes(Discord bot)拉取的 JSON 匯出內容。
 
-    Discord embed 是一種美觀的卡片訊息格式,比純文字 message 更專業。
-    包含的欄位:
-      - 全國平均 AQI(突出顯示)
-      - 最高 / 最低 AQI 的城市
-      - Critic 評分(舊版功能,3-agent refactor 後通常為 None,顯示 「—」)
-      - 資料來源標籤(LIVE / MOCK)
+    架構是「拉取(pull)」而非「推送(push)」:Pipeline 跑完把這份 dict json.dump 到
+    `hermes_export/latest_aqi.json`,Hermes skill(hermes_skills/aqi-live)讀它後在
+    Discord 回答空品 +(若 user_profile 非空)個人化提醒。**本函式純資料組裝**
+    (不寫檔、不碰 st、不發 HTTP),方便單元測試與 app.py 端控制寫入時機。
 
-    Webhook URL 是使用者自己在 Discord 頻道設定中產生的,例:
-      `https://discord.com/api/webhooks/{channel_id}/{token}`
+    Parameters
+    ----------
+    snapshot_df : pd.DataFrame
+        20 城市當下快照(需含 city_id/city/region/aqi/PM2.5/PM10/O3/NO2/SO2/CO/risk)。
+    analysis : str
+        分析師(Agent B)的風險分析純文字(可空)。
+    advisories_raw : str
+        預警員(Agent C)的 `<<<CITY:NAME>>>…` sentinel 串;用 parse_agent_c_per_city 拆。
+    data_mode : str
+        'real' / 'mock' / 'demo' — 讓 Hermes 誠實標示資料性質。
+    user_city : str
+        使用者常駐城市 id。
+    threshold : int
+        個人 AQI 預警閾值。
+    user_profile : dict | None
+        使用者個人健康檔案(age/sex/bmi/diagnoses/med_history…);未填則 None。
+    generated_at : str | None
+        ISO 時間字串;None 則用 datetime.now()。
 
     Returns
     -------
-    tuple[bool, str]
-        (success, status_msg) — UI 顯示 status_msg 讓使用者知道有沒有成功
+    dict
+        可直接 json.dump 的 payload(契約見 hermes_skills/aqi-live/SKILL.md)。
     """
-    url = (url or "").strip()
-    if not url:
-        return False, "未填 Discord webhook URL"
-    if snapshot is None or snapshot.empty:
-        return False, "Snapshot 為空"
-
-    try:
-        avg   = float(snapshot["aqi"].mean())
-        worst = snapshot.sort_values("aqi", ascending=False).iloc[0]
-        best  = snapshot.sort_values("aqi").iloc[0]
-    except Exception as e:
-        return False, f"Snapshot parse: {type(e).__name__}"
-
-    mode_tag = "LIVE" if data_mode == "real" else "MOCK"
-    score_str = f"{critic_score:.1f}/100" if isinstance(critic_score, (int, float)) else "—"
-    embed = {
-        "title": "🦞 LobsterAQI Pipeline 摘要",
-        "description": f"資料來源：{mode_tag} · 覆蓋 {len(snapshot)} 城市",
-        "color": 0x00d9ff,
-        "fields": [
-            {"name": "全國平均 AQI", "value": f"**{avg:.1f}**",
-             "inline": True},
-            {"name": "最高城市", "value": f"{worst['city']} ({worst['aqi']:.0f})",
-             "inline": True},
-            {"name": "最低城市", "value": f"{best['city']} ({best['aqi']:.0f})",
-             "inline": True},
-            {"name": "Critic 評分", "value": score_str, "inline": True},
-        ],
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "footer": {"text": "LobsterAQI · Taiwan Multi-Agent Air Quality Platform"},
+    cities: list[dict] = []
+    national: dict = {"avg_aqi": None, "worst": None, "best": None}
+    if snapshot_df is not None and not snapshot_df.empty:
+        for _, r in snapshot_df.iterrows():
+            _aqi = float(r["aqi"])
+            cities.append({
+                "city_id": str(r["city_id"]),
+                "city":    str(r["city"]),
+                "region":  str(r.get("region") or ""),
+                "aqi":     round(_aqi, 1),
+                "level":   aqi_to_level(_aqi)["name"],
+                "pm25":    round(float(r["PM2.5"]), 1),
+                "pm10":    round(float(r["PM10"]), 1),
+                "o3":      round(float(r["O3"]), 1),
+                "no2":     round(float(r["NO2"]), 1),
+                "so2":     round(float(r["SO2"]), 2),
+                "co":      round(float(r["CO"]), 2),
+                "risk":    round(float(r["risk"]), 1),
+            })
+        w = snapshot_df.sort_values("aqi", ascending=False).iloc[0]
+        b = snapshot_df.sort_values("aqi").iloc[0]
+        national = {
+            "avg_aqi": round(float(snapshot_df["aqi"].mean()), 1),
+            "worst": {"city": str(w["city"]), "aqi": round(float(w["aqi"]), 1),
+                      "level": aqi_to_level(float(w["aqi"]))["name"]},
+            "best":  {"city": str(b["city"]), "aqi": round(float(b["aqi"]), 1),
+                      "level": aqi_to_level(float(b["aqi"]))["name"]},
+        }
+    advisories = parse_agent_c_per_city(advisories_raw or "")
+    city_name = CITY_BY_ID.get(user_city, {}).get("name", user_city)
+    return {
+        "generated_at":     generated_at or datetime.now().isoformat(timespec="seconds"),
+        "data_mode":        data_mode,
+        "national":         national,
+        "cities":           cities,
+        "analyst_summary":  (analysis or "").strip(),
+        "advisories":       advisories,             # {城市名: 建議文字}
+        "user_profile":     user_profile,           # dict 或 None
+        "user_city":        user_city,
+        "user_city_name":   city_name,
+        "user_city_advice": advisories.get(city_name, ""),
+        "threshold":        threshold,
     }
-    try:
-        r = requests.post(url, json={"embeds": [embed]}, timeout=8)
-        ok = r.status_code in (200, 204)
-        return ok, f"HTTP {r.status_code}" + ("" if ok else f" · {r.text[:120]}")
-    except requests.exceptions.Timeout:
-        return False, "Webhook 逾時"
-    except Exception as e:
-        return False, f"{type(e).__name__}: {str(e)[:80]}"
 
 
 # =============================================================================

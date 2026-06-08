@@ -12,6 +12,318 @@
 
 ---
 
+## [2026-06-09] 架構圖連線拉直 + 直書標題改水平 + 步驟①置中 + 擋 Clear cache 快捷鍵
+
+### Fixed
+- **封面「步驟 ①」標題沒置中**:`.eyebrow` 是 `display:inline-block`,在其上加 `text-align:center` 只置中
+  藥丸內文字、藥丸本身仍靠左。改成外層包一個 `text-align:center` 的 block 再放 inline-block 藥丸。([app.py](app.py))
+- **「Clear caches」對話框一直跳**:那是 Streamlit 內建單鍵快捷鍵 **C(Clear cache)/ R(Rerun)** —— 焦點不在
+  輸入框時隨手按到就觸發(本專案根本沒有 `@st.cache_data`,清了也沒作用,只是惱人)。新增
+  `_install_hotkey_guard()`:用 components.html 在父文件 capture 階段攔截,只在「非輸入框焦點 + 無修飾鍵」時
+  吞掉 c / r;在欄位內打字完全不受影響。([app.py](app.py))
+- **架構圖連線不直 / 斜線匯聚**:根因是應用層(app-layer)原本放在中欄內、把 pipeline-band 往下擠,導致
+  左右欄(資料源 / 服務)與 pipeline 不同高 → 連線全斜。修法:把 **app-layer 抽成獨立全寬一列**,三欄
+  (資料源 | 三代理人 | 服務)**頂部對齊**;左右欄改 `.dg-col`(flex 填高 + `space-between` 分散卡片),服務側
+  鏡像資料源側改成 `svc → pipeline-band` 的 `matchY` 水平連線。**結果:5 條資料源 + 2 條服務 = 7 條全水平
+  直線**,其餘 3 條(用戶→應用→pipeline→儲存)為短垂直層連線。([../flowchart-site/js/diagram.js](../flowchart-site/js/diagram.js))
+- **直書「三代理人 Pipeline」看起來怪**:`.band-label` 由左側直書欄(`writing-mode: vertical-rl`,英文逐字
+  堆疊)改成頂部**水平**標題列(`horizontal-tb`)。([../flowchart-site/css/diagram.css](../flowchart-site/css/diagram.css))
+
+### Changed
+- flowchart-site `index.html`:本地 css/js 加 `?v=20260609c` 快取破壞(改檔後瀏覽器才不會吃舊快取;之後
+  再改檔請 bump 版本號 —— 先前驗證時就是被瀏覽器快取的舊 diagram.js 卡住、重啟 server 才更新)。
+
+### Verification
+- `node --check` diagram.js / `py_compile` app.py 綠。
+- 瀏覽器(:8090 · 桌面寬 1600):三欄頂部對齊(569/569/569)、**7 條側連線 y-spread=0(全水平直)**、
+  band 標題 `horizontal-tb`、0 console error。AppTest:封面載入 + 跑一次 0 例外、步驟①置中 wrapper 存在。
+- ⚠ 架構圖三欄是 RWD:**視窗太窄(行動寬)會自動改單欄堆疊**(連線改走垂直),屬正常;要看「三欄水平直線」需桌面寬度。
+
+---
+
+## [2026-06-09] 「流程圖」視圖修復 + 對接去產品化(Agent Bot / 聊天平台)+ 3D 建模
+
+### Fixed
+- **「流程圖」視圖整片空白**([../flowchart-site/js/flowchart.js](../flowchart-site/js/flowchart.js)) — 上一版把 STEP
+  id `push` 改名 `export`,但 `LINKS` 仍指向已不存在的 `push`(`store→push` / `push→done`),
+  `stepById["push"]` 是 undefined → `build()` 在 drawArrows 拋錯 → 整個流程圖視圖空白。改成
+  `store→export` / `export→done`。**這才是先前「按流程圖會卡住」的真正原因**(架構圖那次修的是另一個視圖)。
+
+### Changed — 對接不再寫死特定產品
+- **flowchart-site**:節點 `Hermes Agent` → **Agent Bot**、`Discord` → **聊天平台**(子標示 Discord / LINE /
+  Slack 為例);DIAGRAM.services / demos 面板 / TAGS / EYEBROW / Pipeline 動畫文案全部去 Hermes/Discord
+  字樣(Hermes / OpenClaw 僅作「範例」提及)。
+- **app.py**:SECTION 10 標題「Hermes Discord Bot」→ **Agent Bot**;sidebar 提示、封面步驟①、隱私說明、
+  ICD help、匯出 push_log 等**使用者可見字串**全部改通用;module docstring 同步。
+  (實作 `hermes_skills/` / `hermes_export/` / `build_hermes_payload` 維持原名,作為 Hermes 範例實作 ——
+   契約是一份 JSON,換任何會讀它的 bot 都行,不綁產品。)
+
+### Added — 3D 場景建模(原為通用方塊)
+- [../flowchart-site/js/scene.js](../flowchart-site/js/scene.js) 新增三種程序化 3D 模型:**Agent Bot**(機器人頭 +
+  雙翼 + 天線 + 光環)、**聊天平台**(對話泡泡 + 打字三點 + 尾巴)、**資料匯出**(JSON 文件卡 + 內文線 +
+  向外箭頭)。KIND 對應:hermes→bot / discord→chat / export→export(原本三者都是通用 server 方塊 / db)。
+
+### Verification
+- `node --check` 六個 flowchart JS 全綠;`py_compile` app.py 綠。
+- 瀏覽器(:8090):**流程圖視圖** 14 box + 5 階段帶正常顯示、0 console error;**架構圖**節點標籤 =
+  Agent Bot / 聊天平台、連線靜止單線;**3D 場景**切換後建模 0 error、三個新模型渲染(非方塊)、龍蝦
+  吉祥物在 app 節點;Pipeline 跑到 100% 完成。
+
+---
+
+## [2026-06-09] 不再分五大族群 → 純個人化 + flowchart-site 修(卡頓 / 重疊線 / 恆動)
+
+### Changed — 不再針對「五大敏感族群」,全面改個人化
+- 封面步驟①**移除「健康狀況(五大族群多選)」**,改為「⚠ 我的 AQI 預警閾值」number_input
+  (個人值;demo persona=60)。健康狀況改由 年齡 + ICD-10 已診斷疾病 + 病歷重點 表達。([app.py](app.py))
+- **SECTION 08「🩺 你的個人化健康指數」**:從「每勾一個族群一張 safe_hours 卡」改成 **一張
+  「針對你本人」的卡** —— 以你的 AQI 閾值為門檻算 safe_hours,並列出年齡 / BMI / 已診斷疾病
+  為依據;**一定顯示**(不再需要先勾族群,根治上一版「過敏性鼻炎不在五類 → 卡片不出現」)。
+- 分析師(B)prompt ②「敏感族群建議」→「健康建議」;預警員(C)本就依個人檔案逐城市生成。
+  封面文案 / module docstring / `_persona_dict()`(移 conditions)/ 移除未用的 `SENSITIVE_GROUPS` import 同步。
+- **flowchart-site**:advisor 節點步驟 老人/幼童/… → 讀個人檔案 / 風險分級 / 個人化建議 / 防護等級;
+  advisor demo 面板從「5 族群 grid」改成「你的閾值 → 單一 safe_hours」即時試算;SECTIONS[07] /
+  TAGS / STEPS / Pipeline 動畫文案去除「五大族群」字樣。
+
+### Fixed — flowchart-site 架構圖
+- **連線一直流動(恆動 / 「一直轉」)**:移除 `.conn-flow` 的 `dashflow` 無限動畫。原本每條線疊
+  「靜態 base + 動態 flow」兩條 path,改成**單一靜態 base 線**,只在跑 Pipeline 時由 JS 加
+  `.boost` 高亮當前資料流。([../flowchart-site/css/diagram.css](../flowchart-site/css/diagram.css)、[../flowchart-site/js/diagram.js](../flowchart-site/js/diagram.js))
+- **連線重疊(重疊線)**:即上述兩條 path 疊一起的雙線感;移除 flow path 後變單線。
+- **卡住**:11 條無限 SVG 動畫 + 滑鼠視差在大 DOM 上持續重繪 → 卡頓。移除動畫 + 視差幅度
+  ±4.5/5.5 → ±2.0/2.4;Pipeline 進度條總步數修正(輸出 +2 → +3,先前會略為超過 100%)。
+
+### Verification
+- `py_compile` app/data 全綠;`node --check` 五個 flowchart JS 全綠。
+- AppTest:封面載入本人檔案 → 跑**一次** → SECTION 08 顯示「你的個人化健康指數」**單卡**
+  (無「容忍 AQI」族群卡)、健康狀況多選已移除、AQI 閾值 input 存在、0 例外。
+- 瀏覽器(:8090)架構圖:`animatedConnPaths=0`、單線 11 條、advisor 步驟=個人化四步、
+  advisor demo=個人版(0 族群卡)、Pipeline 跑到 100% 完成、0 console error。
+
+---
+
+## [2026-06-09] demo persona 改用本人資料(台中 · 19 · 過敏性鼻炎)
+
+### Changed
+- **封面 🎬 一鍵載入改成本人 persona**([app.py](app.py) `_render_persona_step1`)— 從原本的
+  虛構「72 歲 COPD」改為使用者本人:台中市 / 19 歲 / 男 / 172cm·65kg(BMI 22.0) / 走路 /
+  過敏性鼻炎(ICD-10 J30) / 病歷「空品差時鼻塞、眼睛癢」/ 個人 AQI 閾值 60。按鈕更名
+  「🎬 載入我的檔案」。
+- **demo 歷史資料重灌成台中**:`python scripts/seed_demo_data.py --city taichung`,讓
+  SECTION 08 趨勢/比上週徽章、SECTION 09 散點對「台中」亮起(原本灌的是台北)。
+
+### Note
+- 使用者沒有勾五大快選敏感族群(過敏性鼻炎不在 老人/幼童/氣喘/心血管/孕婦 內),所以
+  SECTION 08 的「🩺 個人化健康指數卡(safe_hours)」會顯示提示而非卡片;個人化改由
+  分析師 / 預警員的 LLM 文字(含 J30 過敏性鼻炎)+ 城市趨勢 + Hermes 回覆呈現。demo 時想
+  讓指數卡出現,在封面勾任一族群即可。
+
+### Verification
+- AppTest:封面按「🎬 載入我的檔案」→ 跑一次 Pipeline → 分析師 prompt 含「19 歲 / 過敏性鼻炎 /
+  台中」、不含「72 歲」;0 例外;`latest_aqi.json` 的 user_profile age=19 / city=taichung /
+  diagnoses=[過敏性鼻炎(J30)]。`read_export.py 台中市` 印出含「給 19 歲、過敏性鼻炎、BMI 22.0
+  的提醒」。台中 demo:7 天趨勢 AQI 47–148、比上週 +70%、散點 r=+0.856。
+
+---
+
+## [2026-06-09] 架構轉換:推送(Webhook/Cron)→ 拉取(Hermes Discord Bot 讀 JSON 匯出)
+
+把對外整合從「推送」改成「拉取」:不再用 Discord webhook、不再產生 cron 指令,改成 Pipeline
+跑完匯出 `latest_aqi.json`、由 Hermes(Discord bot)**來這裡讀**。個人健康檔案移到封面
+「步驟①」,分析師第一次跑就吃得到(根治需重跑問題)。SECTION 10 改成 Hermes Bot 說明 +
+匯出狀態。flowchart-site 同步改為 push→pull。
+
+### Added
+- **`data.build_hermes_payload()`**([data.py](data.py)) — 純資料組裝,產生 Hermes 拉取用的
+  JSON payload(`national` / `cities[20]` / `analyst_summary` / `advisories` / `user_profile` …)。
+- **`_write_hermes_export()` + `_persona_dict()`**([app.py](app.py)) — Pipeline 末端把結果寫進
+  `hermes_export/latest_aqi.json`(取代原 webhook 推送)。
+- **`_render_persona_step1()` 封面個人健康檔案**([app.py](app.py)) — 個人設定(快選 + 進階
+  檔案 + 🎬 demo 載入 + 清除)整段移到啟動 Pipeline「之前」的「步驟①」,所以第一次跑
+  分析師 / 預警員就吃得到 persona,不必重跑。
+- **`hermes_agents/aqi-reporter/`**(IDENTITY/SOUL/TOOLS/USER.md)+ **`hermes_skills/aqi-live/`**
+  (SKILL.md + `read_export.py`)— Hermes Discord bot 人設 + 讀 `latest_aqi.json` 格式化 Discord
+  回覆的 skill(支援指定城市 + 依 persona 個人化;`read_export.py [城市]` 可本機驗證,utf-8)。
+
+### Changed
+- **SECTION · 08 變純結果**([app.py](app.py)) — 移除所有輸入 widget(已移到封面),只留
+  你的城市現況卡 / 個人化健康指數卡 / 7 天趨勢;頂端 caption 指回封面步驟①。
+- **SECTION · 10 改成 Hermes Discord Bot**([app.py](app.py)) — 移除 cron 表單 / telegram·slack
+  選項 / 「產生指令·立即註冊」按鈕;改顯示匯出狀態(最後匯出時間 / 城市數 / data_mode /
+  是否含 persona)+ 設定說明 + 「Hermes 會回什麼」即時預覽。
+- **sidebar** — 移除「對接後端」selectbox;改一行 Hermes 整合說明。
+- **flowchart-site**([../flowchart-site/js/data.js](../flowchart-site/js/data.js) 等)— 架構模型
+  push→pull:`openclaw` 節點改 `hermes`、`discord` relabel、新增 `export` 節點;邊改成
+  advisor→export→hermes→discord(新 `pull` kind);DIAGRAM.services / SECTIONS / flows /
+  features / MODELS 同步;diagram.js CONN、demos.js(discord/hermes/export 面板 + TAGS/EYEBROW)、
+  flowchart.js STEPS、main.js Pipeline 動畫、index.html 圖例皆同步。
+
+### Removed
+- **Discord webhook 推送**:`data.send_discord_webhook()`、run_pipeline 內的 webhook 區塊、
+  session key `discord_webhook_url`。
+- **cron 產生 / 對接後端抽象**(上輪新增、本次已無用):`data.GATEWAY_BACKENDS` /
+  `DEFAULT_GATEWAY` / `build_cron_command()` / `gateway_memory_path()`、SECTION 08
+  「💾 同步至記憶體」按鈕、SECTION 10 cron 表單、`scripts/setup_cron.bat`、未用的
+  `shlex` / `subprocess` import、session key `gateway_backend`。
+
+> 保留:LobsterAQI 龍蝦品牌、`openclaw_agents/` + `openclaw_skills/`(README 標為 legacy:在
+> gateway 裡跑 agent + 正式 RAG,與推送/cron 無關)。
+
+### Verification
+- `py_compile` app / data / tsdb / seed_demo_data / read_export 全綠。
+- **Streamlit AppTest**(stub 網路 + 攔截 `call_llm_api`):封面按 🎬 → 設 `_pipeline_should_run`
+  跑一次 → 分析師 prompt 含「72 歲 / COPD」、**不含**「30 歲」(persona 第一次就生效);
+  全頁 0 例外;`hermes_export/latest_aqi.json` 產生(20 城市 / analyst_summary / user_profile age=72)。
+- `python hermes_skills/aqi-live/read_export.py 台北市` 印出含 persona 提醒的 Discord 回覆。
+- demo 資料隔離(`source='demo'`)未受影響。
+
+手動 checklist:
+- [ ] 封面有「步驟① 個人健康檔案」+ 🎬 載入範例;SECTION 08 只剩結果(無輸入框)
+- [ ] 填 persona → 跑「一次」 Pipeline → 分析師 / 預警員文字提到 72 歲 / COPD(不必重跑)
+- [ ] SECTION 10 顯示「最後匯出 …」+ 預覽;`read_export.py` 跑得出內容
+- [ ] flowchart-site 開得起來、無 console error;點 Hermes / 資料匯出 節點開出新面板;跑 Pipeline 動畫到「Hermes 讀 JSON 回答」
+- [ ] 全專案 grep 無殘留 `send_discord_webhook` / `build_cron_command` / `gateway_backend`
+
+---
+
+## [2026-06-08] 修復:分析師永遠注入「年齡 30」(預設值誤判為已填)
+
+### Fixed
+- **分析師 / 預警員的 LLM prompt 永遠帶「年齡:30 歲」,看似讀不到 demo persona**([app.py](app.py))
+  - 根因:`user_age` 預設值是 **30**(truthy),但 `_personal_profile_block()` 的「沒填就
+    不注入」零回歸守衛是 `if not (age or diags or hist): return ""` —— age=30 永遠 truthy →
+    守衛從不觸發 → 即使完全沒填,也把「年齡:30 歲」注入 prompt,`profile_filled` 也恆為
+    True。上台時分析師會講「30 歲」,與 72 歲 COPD persona 對不上 → 容易被抓包。
+  - 修法:
+    - `user_age` 預設 30 → **0**(0 = 未提供);「🗑 清除個人健康資料」按鈕也改設 0。
+    - `_personal_profile_block()` 年齡顯示改條件式(0 →「未提供」);守衛因此恢復正確:
+      沒填(age=0 且無診斷 / 無病歷)→ 回空字串、完全不注入(真・零回歸)。
+    - 年齡 number_input 加 help「0 = 不提供」;MEMORY.md 寫入同步顯示「未提供」。
+    - 載入 demo persona 後新增提醒 caption + toast:分析師 / 預警員的「文字報告」需
+      **重跑一次 Pipeline** 才會用新 persona(指數卡是即時的,但 LLM 報告是 Pipeline
+      期間生成的)。
+  - 結果:demo 流程 = 跑 Pipeline → 🎬 載入 persona → 再跑一次 Pipeline → 分析師據 72 歲
+    COPD 分析,不再出現 30 歲。
+
+### Verification
+- Streamlit AppTest + 攔截 `data.call_llm_api` 擷取 prompt:
+  - 未填:prompt **不含**「30 歲 / 年齡」,分析師只跑 1 次 LLM(預警員 C 正確跳過)。
+  - 載入 demo persona:prompt **含**「72 歲 / COPD」、**不含**「30 歲」,分析師 + 預警員共 2 次 LLM。
+  - 0 例外。
+
+---
+
+## [2026-06-08] 修復:demo 數據被 Pipeline 覆蓋 + AI 助理關閉殘留/延遲
+
+接續同日「對接後端 + demo 灌庫」,修兩個實測發現的問題。
+
+### Fixed
+- **載入 demo 後重跑 Pipeline,demo 數據就不見了**
+  - 根因:seed_demo_data 原本把 demo AQI 寫在 `source='cams_hourly'`,與真實 Pipeline
+    的 CAMS 寫入**共用主鍵 `(ts, city_id, source)`** → 重跑 Pipeline 抓真實 CAMS 過去 7 天
+    回填時 UPSERT 直接覆蓋掉 demo 的「污染事件軌跡」(7 天趨勢 / 比上週 +53% 徽章 /
+    SECTION 09 散點全被洗成真實平緩值)。
+  - 修法:把 demo 資料隔離到獨立的 **`source='demo'`**([seed_demo_data.py](scripts/seed_demo_data.py)),
+    與真實 `cams_hourly` 完全不撞鍵;App 在儀表板閘門後偵測 `tsdb.has_demo_data()`,有 demo
+    就自動改讀 demo source([app.py](app.py) 的 `_aqi_src` / `_diary_src`,套用到 SECTION 02
+    比上週、本週紀錄板、SECTION 08 趨勢/徽章、SECTION 09 散點)。重跑 Pipeline 只動
+    `cams_hourly`,demo 不受影響;`--clear` 後自動回讀真實資料(零回歸)。
+  - 新增 `tsdb.has_demo_data(city_id=None)`、`tsdb.diary_with_aqi(..., source=...)`([tsdb.py](tsdb.py))。
+  - SECTION 08 在 demo 模式顯示 caption「🎬 顯示預載 demo 數據」提示。
+- **AI 助理聊天面板關閉有文字殘留 + 關閉延遲**([app.py](app.py))
+  - 根因:✕ 關閉鈕用「回傳值 + `st.rerun()`」:點擊先觸發 fragment 自動重跑(此時
+    `chat_expanded` 仍為 True → panel 連同捲動 iframe **又重畫一次**),handler 才設 False
+    再 `st.rerun()` 切 FAB —— 兩次 fragment 執行 + panel 重畫造成文字殘留與延遲。
+  - 修法:改用 `on_click` callback(`_set_chat_open` / `_set_chat_closed`):callback 在重跑
+    「之前」就改好 `chat_expanded`,重跑時直接畫對的分支,只跑一次 rerun。FAB 開啟鈕一併改。
+
+### Verification
+- `py_compile` app/data/tsdb/seed 全綠;Streamlit AppTest 全頁渲染(demo source active)0 例外。
+- **demo 隔離存活測試**:寫入 3380 筆模擬真實 `cams_hourly` 後,demo 的 7 天趨勢
+  (AQI 24–148)/ 比上週 +53% / 散點 r=+0.856 **完全不變**(demo SURVIVED pipeline)。
+- **聊天開關**:FAB 點擊 → 展開(panel + ✕);✕ 點擊 → 收合(FAB 回來),`chat_expanded`
+  正確翻轉,0 例外。
+
+手動 checklist:
+- [ ] 跑 `seed_demo_data.py` → SECTION 08 看到趨勢 + 比上週徽章 + caption「🎬 顯示預載 demo 數據」
+- [ ] 載入 demo persona → 重跑 Pipeline → SECTION 08/09 的 demo 內容**仍在**(不再被洗掉)
+- [ ] `seed_demo_data.py --clear` → demo 內容消失,改顯示真實 cams_hourly(或空狀態提示)
+- [ ] 開 AI 助理 → 按 ✕ → panel 立刻收掉、無文字殘留、無明顯延遲
+
+---
+
+## [2026-06-08] 對接後端可切換(OpenClaw 龍蝦 / Hermes)+ 期末 demo 假資料灌庫工具
+
+把過去寫死的 OpenClaw(龍蝦)整合,抽成「可切換的對接後端」registry —— 現在
+SECTION 10 的 cron 指令與 SECTION 08 的記憶體同步,都會跟著 sidebar 選的後端
+(🦞 OpenClaw / 🪽 Hermes)動態改變 CLI 名稱與 MEMORY.md 路徑。Hermes 目前為
+**實驗性佔位**(指令/路徑對稱複製 OpenClaw 慣例,待接上實際 Hermes CLI 再校正,
+只需改 `data.build_cron_command()` 一處)。另外新增期末 demo 用的假資料灌庫工具,
+讓 SECTION 08-10 一打開就有豐富內容可秀。
+
+### Added
+- **對接後端 registry `GATEWAY_BACKENDS` + `DEFAULT_GATEWAY`**([data.py](data.py)) — 仿
+  `LLM_PROVIDERS` 的可擴充字典,每筆含 `name / cli / memory_root / workspace / docs /
+  experimental`。內建 `openclaw`(真值)與 `hermes`(實驗性佔位)。
+- **`gateway_memory_path(backend_id, agent_id)`**([data.py](data.py)) — 回傳該後端 +
+  agent 的 MEMORY.md 路徑(`<root>/<id>/agent/MEMORY.md`,`~` 自動展開);不認得的
+  backend_id 安全 fallback 到 OpenClaw。
+- **`build_cron_command(backend_id, ...)`**([data.py](data.py)) — 集中組裝 `<cli> cron
+  add ...` argv;將來換後端只改這一個函式,UI 與呼叫端不動。
+- **sidebar「進階整合 · 對接後端」selectbox**([app.py](app.py)) — 在 LLM 提供商之下,
+  可切 🦞 OpenClaw / 🪽 Hermes;選實驗性後端會顯示 ⚠ 佔位提醒。新增 session_state
+  `gateway_backend`(預設 `DEFAULT_GATEWAY`)。
+- **SECTION · 08「🎬 載入 demo 範例檔案」按鈕**([app.py](app.py)) — 一鍵把個人設定填成
+  寫實的「72 歲 · COPD(J44)+ 高血壓(I10)· BMI 29.4」persona(城市台北、狀況老人
+  + 心血管、病歷重點),並自動展開進階健康檔案 expander。實作用「設鏡像欄位 + pop
+  widget key」逼 widget 重新初始化,跨 Streamlit 版本穩定、無警告。
+- **`scripts/seed_demo_data.py` + `scripts/seed_demo_data.bat`**(新檔) — 期末 demo 假
+  資料灌庫:① 過去 16 天 × 每小時 × 20 城市 AQI 歷史 ② 常駐城市 14 天「污染事件
+  軌跡」(本週均值明顯高於上週)③ 14 天健康日誌(症狀由同一軌跡推導 → 正相關)。
+  全部標記 `data_mode='demo'` / note 含 `[demo]`,可 `--clear` 一鍵移除,不污染真實
+  資料。`--city <id>` 可換常駐城市。
+- **`docs/demo_guide.md`**(新檔) — 「個人化推薦以後(SECTION 08-10)」的期末 demo 逐段
+  講稿 + 事前準備 + Hermes/OpenClaw 切換亮點 + 無 LLM key 的 fallback 說法。
+
+### Changed
+- **SECTION · 08 記憶體同步改讀選定後端**([app.py](app.py)) — 按鈕標題、寫入路徑、成功
+  訊息從寫死的 `OpenClaw` / `~/.openclaw/...` 改為 `gateway_memory_path()` + 後端
+  `name`。privacy 提示同步動態化(順手補上原本漏掉的 `/agent/` 路徑段)。
+- **SECTION · 08「🗑 清除個人健康資料」按鈕強化**([app.py](app.py)) — 除了重設鏡像
+  欄位,額外 pop 進階欄位的 widget key 並解除 `demo_profile_loaded`,確保某些
+  Streamlit 版本下欄位也能確實視覺重置(同時收合 expander)。
+- **SECTION · 10 cron 產生改用 `build_cron_command()`**([app.py](app.py)) — section-sub
+  文字、「複製到 terminal」提示中的 `cron list` 指令前綴,皆隨選定後端動態改變
+  (龍蝦 `openclaw` / Hermes `hermes`)。
+- **module docstring 與區段註解**([app.py](app.py)) — SECTION 10 描述從「OpenClaw cron」
+  改為「對接後端(OpenClaw 龍蝦 / Hermes)cron」;cron 區段註解標明 CLI/旗標集中在
+  `data.build_cron_command()`。
+
+### Verification
+```powershell
+cd <project>
+python -m py_compile app.py data.py tsdb.py scripts/seed_demo_data.py   # 全綠
+python scripts/seed_demo_data.py        # 灌 demo 資料(可加 --clear / --city)
+```
+- **py_compile**:app.py / data.py / tsdb.py / seed_demo_data.py 全部通過。
+- **Streamlit AppTest 無頭跑全頁**:預設開機 0 例外、sidebar 出現「Agent Gateway」
+  選擇器;模擬 `pipeline_done` + 假快照後 SECTION 02-10 全渲染 0 例外。
+- **demo 載入 / 清除按鈕**:點「🎬 載入 demo 範例」→ age=72 / sex=male / BMI 來源
+  168cm·83kg / dx=[J44,I10] / demo_flag=True;點「🗑 清除」→ 全部回預設、flag=False。
+- **後端切換**:`gateway_backend='hermes'` → 記憶體同步按鈕變「💾 同步至 🪽 Hermes
+  Agent(實驗性) 記憶體」、privacy 顯示 `~/.hermes`、SECTION 10 sub 顯示 Hermes cron。
+- **demo 資料品質**(台北):比上週 **+53%**(this 85.6 / prev 55.9)、7 天趨勢 AQI
+  16–148、SECTION 09 配對 14 筆 **Pearson r = +0.856**(明顯正相關且非 1.0)。
+
+手動 checklist:
+- [ ] sidebar 切「🪽 Hermes」→ 出現實驗性 ⚠ 提醒;SECTION 10 產生的指令第一個字是 `hermes`
+- [ ] 切回「🦞 OpenClaw」→ 指令第一個字是 `openclaw`、記憶體路徑回 `~/.openclaw`
+- [ ] SECTION 08 按「🎬 載入 demo 範例」→ 進階檔案自動展開、個人化指數卡出現 72 歲/心血管
+- [ ] 先跑 `seed_demo_data.py` → SECTION 08 有 7 天趨勢 + 比上週徽章、SECTION 09 散點有趨勢線
+- [ ] `seed_demo_data.py --clear` → SECTION 08/09 的 demo 內容消失,真實資料(若有)不受影響
+
+---
+
 ## [2026-05-26] 預警員個人化建議超時修復:timeout 25s → 120s
 
 ### Fixed

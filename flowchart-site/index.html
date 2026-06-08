@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🦞 LobsterAQI — 3D 流程圖</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="css/style.css?v=20260609c" />
+<link rel="stylesheet" href="css/diagram.css?v=20260609c" />
+<link rel="stylesheet" href="css/flowchart.css?v=20260609c" />
+</head>
+<body>
+  <!-- 3D 畫布（3D 場景視圖） -->
+  <canvas id="scene"></canvas>
+
+  <!-- 分層架構圖視圖（預設） -->
+  <div id="diagram-view">
+    <div id="diagram-stage">
+      <div id="diagram-tilt">
+        <div id="diagram"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 傳統流程圖視圖（泳道圖） -->
+  <div id="flow-view" class="hidden"></div>
+
+  <!-- Pipeline 進度（兩視圖共用） -->
+  <div id="pipeline-progress" class="hidden">
+    <div class="pp-steps">
+      <div class="pp-step" data-agent="collector"><span class="pp-num">1</span>採集者</div>
+      <span class="pp-arrow">▸</span>
+      <div class="pp-step" data-agent="analyst"><span class="pp-num">2</span>分析師</div>
+      <span class="pp-arrow">▸</span>
+      <div class="pp-step" data-agent="advisor"><span class="pp-num">3</span>預警員</div>
+    </div>
+    <div class="pp-sub" id="pp-sub">準備中…</div>
+    <div class="pp-bar"><span class="pp-fill" id="pp-fill"></span></div>
+  </div>
+
+  <!-- 載入畫面 -->
+  <div id="loader">
+    <div class="loader-lobster">🦞</div>
+    <div class="loader-title">LobsterAQI</div>
+    <div class="loader-sub">建構 3D 架構流程圖…</div>
+    <div class="loader-bar"><span></span></div>
+  </div>
+
+  <!-- 頂部標題列 -->
+  <header id="topbar">
+    <div class="brand">
+      <span class="brand-lobster">🦞</span>
+      <div class="brand-text">
+        <div class="brand-name">LobsterAQI</div>
+        <div class="brand-tag">台灣空品 · 多代理人架構 · 3D 流程圖</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <div class="view-switch" id="view-switch">
+        <button data-view="diagram" class="active">🗺 <span class="vs-label">架構圖</span></button>
+        <button data-view="flow">📋 <span class="vs-label">流程圖</span></button>
+        <button data-view="scene">🌐 <span class="vs-label">3D 場景</span></button>
+      </div>
+      <button id="btn-play" class="btn btn-primary">▶ <span class="btn-full">跑一次 </span>Pipeline</button>
+      <button id="btn-pause" class="btn hidden" title="暫停／繼續（停在當下查看傳送中的封包）">⏸ <span class="btn-full">暫停</span></button>
+      <button id="btn-loop" class="btn" title="自動循環播放，不用一直手動啟動">🔁 <span class="btn-full">循環</span></button>
+      <button id="btn-reset" class="btn">⟳ <span class="btn-full">重置</span>視角</button>
+      <button id="btn-theme" class="btn" title="切換深色 / 淺色主題">🌙</button>
+      <a id="btn-repo" class="btn btn-ghost" href="https://github.com/Tunai-0511/aqi-tw-personal" target="_blank" rel="noopener">原始碼 ↗</a>
+    </div>
+  </header>
+
+  <!-- 左下角圖例 -->
+  <div id="legend">
+    <div class="legend-title">節點分類</div>
+    <div class="legend-row"><span class="dot" style="--c:#00d9ff"></span>採集 / 介面</div>
+    <div class="legend-row"><span class="dot" style="--c:#9b59ff"></span>分析 · LLM 重</div>
+    <div class="legend-row"><span class="dot" style="--c:#00e676"></span>預警 / 儲存</div>
+    <div class="legend-row"><span class="dot" style="--c:#ff8c42"></span>外部資料源</div>
+    <div class="legend-row"><span class="dot" style="--c:#ffd93d"></span>LLM 供應商</div>
+    <div class="legend-row"><span class="dot" style="--c:#9b59ff"></span>Hermes 拉取</div>
+    <div class="legend-hint">滑鼠拖曳旋轉 · 滾輪縮放 · 點節點看 demo</div>
+  </div>
+
+  <!-- 通訊日誌（可收合 / 關閉，避免擋住內容） -->
+  <div id="statuslog" class="hidden">
+    <div class="statuslog-head" id="statuslog-head">
+      <span class="pulse"></span><span id="statuslog-title">Pipeline 通訊日誌</span>
+      <button id="statuslog-collapse" class="sl-btn" title="收合 / 展開">▁</button>
+      <button id="statuslog-close" class="sl-btn" title="關閉">✕</button>
+    </div>
+    <div id="statuslog-body"></div>
+  </div>
+
+  <!-- 滑過節點的 tooltip -->
+  <div id="tooltip" class="hidden"></div>
+
+  <!-- 節點 demo 側欄 -->
+  <aside id="panel" class="hidden">
+    <button id="panel-close" aria-label="關閉">✕</button>
+    <div id="panel-content"></div>
+  </aside>
+  <div id="panel-scrim" class="hidden"></div>
+
+  <!-- 載入順序：先 three，再資料、demo、場景、主程式（皆為傳統 script，file:// 可直接開） -->
+  <script src="vendor/three.min.js"></script>
+  <!-- 後製發光 bloom，本地離線可用。順序：shader → EffectComposer(定義 Pass 基類) → 各 Pass -->
+  <script src="vendor/CopyShader.js"></script>
+  <script src="vendor/LuminosityHighPassShader.js"></script>
+  <script src="vendor/EffectComposer.js"></script>
+  <script src="vendor/ShaderPass.js"></script>
+  <script src="vendor/RenderPass.js"></script>
+  <script src="vendor/UnrealBloomPass.js"></script>
+  <!-- glTF 模型載入器（讓節點可換成你自己的 .glb 模型） -->
+  <script src="vendor/GLTFLoader.js"></script>
+  <!-- 內建模型（base64）→ file:// 雙擊也能載入，免伺服器 -->
+  <script src="js/models-data.js?v=20260609c"></script>
+  <script src="js/data.js?v=20260609c"></script>
+  <script src="js/demos.js?v=20260609c"></script>
+  <script src="js/diagram.js?v=20260609c"></script>
+  <script src="js/flowchart.js?v=20260609c"></script>
+  <script src="js/scene.js?v=20260609c"></script>
+  <script src="js/main.js?v=20260609c"></script>
+</body>
+</html>

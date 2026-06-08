@@ -15,9 +15,9 @@
   - **SECTION · 05 環境關聯**:濕度 vs PM2.5、風玫瑰
   - **SECTION · 06 官方 vs 民間**:EPA 測站對比 CivilIoT / LASS-net 微型感測器
   - **SECTION · 07 健康預警**:每個城市一張預警卡,有填個人健康檔案時展開為個人建議
-  - **SECTION · 08 個人化推薦**:依使用者城市 / 健康狀況給針對性指數卡
+  - **SECTION · 08 個人化推薦**:依使用者城市 / 個人健康檔案給個人化健康指數(不再分五大族群)
   - **SECTION · 09 健康日誌**:每日打卡 + 症狀 vs AQI 相關性散點
-  - **SECTION · 10 個人訂閱**:產生 OpenClaw cron 指令的表單(含每日 Digest 模式)
+  - **SECTION · 10 Agent Bot**:Pipeline 匯出 latest_aqi.json 供 Agent Bot(聊天平台)拉取 + 匯出狀態
   - **右下角浮動 AI 助理**:LINE 風格聊天視窗,使用 RAG + LLM 回答問題
 
 核心設計原則:
@@ -41,8 +41,6 @@ from __future__ import annotations
 import json
 import random
 import re
-import shlex
-import subprocess
 import time
 from datetime import datetime, timedelta
 from html import escape   # 用於把使用者輸入或 LLM 輸出 escape 後安全嵌入 HTML
@@ -53,9 +51,10 @@ import streamlit as st
 # data 模組:所有資料生成 / API 抓取 / LLM 呼叫的單一入口
 from data import (
     AGENTS, AQI_LEVELS, CITIES, CITY_BY_ID,
-    LLM_PROVIDERS, OUTDOOR_ACTIVITIES, POLLUTANTS, SENSITIVE_GROUPS,
+    LLM_PROVIDERS, OUTDOOR_ACTIVITIES, POLLUTANTS,
     USER_ICD10_OPTIONS,
     aqi_to_level,
+    build_hermes_payload,
     call_llm_api,
     fetch_citizen_sensors,
     fetch_open_meteo_aq_batch,
@@ -65,11 +64,10 @@ from data import (
     generate_real_timeseries,
     generate_time_series,
     parse_agent_c_per_city,
-    send_discord_webhook,
 )
 import tsdb
-# OpenClaw 只用於 cron 排程推送 + MEMORY.md 跨會話記憶(NOT 用於 in-app LLM 呼叫,
-# 因為走 gateway 會多 30-60 秒插件冷啟)。lazy import 在 subscribe 區段需要時才載。
+# 對接後端是「拉取」模型:Pipeline 跑完把結果匯出成 hermes_export/latest_aqi.json,
+# Hermes(Discord bot)讀它在 Discord 回答。in-app LLM 仍直接打各家 HTTP API。
 from styles import AGENT_STAGE_CSS, DARK_THEME_CSS
 # charts 模組:所有 Plotly 圖表工廠
 from charts import (
@@ -138,8 +136,8 @@ def init_state():
         "llm_model":     "",                 # 空字串會 fallback 到 LLM_PROVIDERS 的 default_model
         "llm_base_url":  "",                 # 空字串會用 provider 預設 endpoint
 
-        # ── OpenClaw 對應表 ──
-        # 3-agent 設計的 id 對應,給訂閱頁與個人化推薦使用。
+        # ── agent id 對應表 ──
+        # 3-agent 設計的 id 對應(collector / analyst / advisor)。
         # (早期 5-agent 設計的 scraper / critic 已於 2026-05-13 移除)
         "openclaw_agent_map":     {
             "collector": "collector",
@@ -149,7 +147,6 @@ def init_state():
 
         # ── 外部服務金鑰 ──
         "epa_key":                "",        # 環境部 EPA Open Data Token(必填才能拿到真實資料)
-        "discord_webhook_url":    "",        # Discord webhook(選填,Pipeline 跑完會 POST 摘要)
 
         # ── 快照 / 時序資料 ──
         # 都是 DataFrame,Pipeline 跑完才有值。
@@ -187,13 +184,16 @@ def init_state():
         "user_aqi_threshold": 100,           # 預設 100(對敏感族群不健康的界線)
         # ── 進階個人健康檔案(RAG 個人化升級,SECTION · 08 expander)──
         # 寫進 OpenClaw MEMORY.md + 注入 LLM prompt 供分析師 / 預警員 / AI 助理參考
-        "user_age":         30,              # 0-120 歲
+        "user_age":         0,               # 0 = 未提供(刻意非 30:30 會讓 _personal_profile_block 誤判「已填」而永遠把年齡 30 注入 LLM)
         "user_sex":         "prefer_not",    # female / male / other / prefer_not
         "user_height_cm":   165.0,           # 用於計算 BMI(80-230 cm)
         "user_weight_kg":   60.0,            # 用於計算 BMI(20-200 kg)
         "user_diagnoses":   [],              # list of ICD-10 codes(來自 USER_ICD10_OPTIONS)
         "user_med_history": "",              # text_area 病歷重點(使用者自填)
         "user_med_files":   [],              # 已上傳的個人病歷檔 metadata list[{name, n_chunks}]
+        # 個人檔案載入旗標:按封面「🎬 載入我的檔案」後設 True,讓進階健康檔案
+        # expander 自動展開(方便期末 demo 一鍵秀出本人 persona)。
+        "demo_profile_loaded": False,
         "chat_expanded":   False,            # 浮動聊天面板是展開還是收起(FAB)
         "selected_hour":   None,             # 時間軸 slider 位置(None = 當前快照)
     }
@@ -202,6 +202,40 @@ def init_state():
         st.session_state.setdefault(k, v)
 
 init_state()
+
+
+def _install_hotkey_guard() -> None:
+    """擋掉 Streamlit 內建單鍵快捷鍵 C(Clear cache)/ R(Rerun)。
+
+    這兩個快捷鍵在「焦點不在輸入框」時,使用者隨手按到 c / r 就會觸發 —— demo 時
+    「Clear caches」對話框一直跳很惱人。用 components.html 在父文件 capture 階段攔截:
+    只在『非輸入框焦點 + 無修飾鍵』時吞掉 c / r;在欄位內正常打字完全不受影響。
+    用 window 旗標確保只裝一次(components.html 每次 rerun 會重跑,但 listener 只加一次)。
+    """
+    from streamlit.components.v1 import html as _h
+    _h(
+        """
+        <script>
+        (function () {
+          const w = window.parent;
+          if (!w || w.__lobsterHotkeyGuard) return;
+          w.__lobsterHotkeyGuard = true;
+          w.document.addEventListener('keydown', function (e) {
+            const k = (e.key || '').toLowerCase();
+            if ((k === 'c' || k === 'r') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+              const t = e.target, tag = (t && t.tagName || '').toLowerCase();
+              const editable = tag === 'input' || tag === 'textarea' || (t && t.isContentEditable);
+              if (!editable) { e.stopImmediatePropagation(); e.preventDefault(); }
+            }
+          }, true);
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
+_install_hotkey_guard()
 
 # 資料都活在 session_state,run_pipeline() 填入後其他區段才能讀取。
 
@@ -757,6 +791,63 @@ def _paint_chat(ph) -> None:
     ph.markdown(_build_chat_log_html(), unsafe_allow_html=True)
 
 
+# =============================================================================
+# Hermes JSON 匯出(拉取模型)— Pipeline 跑完寫 hermes_export/latest_aqi.json,
+# Hermes(Discord bot)讀它在 Discord 回答。取代舊的 Discord webhook 推送。
+# =============================================================================
+def _persona_dict():
+    """把使用者個人健康檔案組成結構化 dict(供 JSON 匯出);完全沒填回 None。
+
+    「有沒有填」的判準(年齡>0 / 有診斷 / 有病歷)。封面步驟①填好後,Pipeline 第一次
+    跑就會把它一起匯出給 Hermes。改版後不再用五大族群,個人化以年齡 / BMI / 診斷為準。
+    """
+    age   = int(st.session_state.get("user_age", 0) or 0)
+    diags = st.session_state.get("user_diagnoses", []) or []
+    hist  = (st.session_state.get("user_med_history") or "").strip()
+    if not (age or diags or hist):
+        return None
+    bmi, bmi_cat = _calc_bmi(
+        st.session_state.get("user_height_cm", 0) or 0,
+        st.session_state.get("user_weight_kg", 0) or 0,
+    )
+    diag_labels = [
+        f"{d['label']}（{d['code']}）"
+        for d in USER_ICD10_OPTIONS if d["code"] in diags
+    ]
+    sex_label = {"female": "女", "male": "男", "other": "其他",
+                 "prefer_not": "未提供"}.get(
+        st.session_state.get("user_sex", "prefer_not"), "未提供")
+    return {
+        "age":          age,                 # 0 = 未提供
+        "sex":          sex_label,
+        "bmi":          round(bmi, 1),
+        "bmi_category": bmi_cat,
+        "diagnoses":    diag_labels,
+        "med_history":  hist,
+        "city":         st.session_state.get("user_city", "taipei"),
+        "threshold":    int(st.session_state.get("user_aqi_threshold", 100)),
+    }
+
+
+def _write_hermes_export(snapshot_df):
+    """把這次 Pipeline 結果寫成 hermes_export/latest_aqi.json(Hermes 拉取用)。回傳 Path。"""
+    from pathlib import Path
+    payload = build_hermes_payload(
+        snapshot_df,
+        analysis=st.session_state.get("llm_analysis", ""),
+        advisories_raw=st.session_state.get("agent_c_advisories", ""),
+        data_mode=st.session_state.get("data_mode", "mock"),
+        user_city=st.session_state.get("user_city", "taipei"),
+        threshold=int(st.session_state.get("user_aqi_threshold", 100)),
+        user_profile=_persona_dict(),
+    )
+    out_dir = Path(__file__).resolve().parent / "hermes_export"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "latest_aqi.json"
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path
+
+
 def run_pipeline(
     office_ph=None,
     cleaning_ph=None,
@@ -788,7 +879,7 @@ def run_pipeline(
             存到 `agent_c_advisories`,UI 用 `parse_agent_c_per_city()` 拆 dict
 
       整批寫入 SQLite tsdb(時序快取),供「過去 7 天」紀錄板使用。
-      若有設 Discord webhook,推送 Pipeline 摘要 embed。
+      最後把結果匯出成 hermes_export/latest_aqi.json,供 Hermes(Discord bot)拉取。
 
     Parameters
     ----------
@@ -997,7 +1088,7 @@ def run_pipeline(
             f"- WHO 2021：PM2.5 年均 ≤ 5 μg/m³，24h ≤ 15 μg/m³\n"
             f"- EPA NAAQS：PM2.5 24h ≤ 35 μg/m³\n"
             f"- Lancet 2023：高 PM2.5 下劇烈運動，肺部沉積量 ↑3-5x\n\n"
-            f"請用 3 段繁體中文輸出：① 現況摘要 ② 敏感族群建議 ③ 未來 6 小時研判。"
+            f"請用 3 段繁體中文輸出：① 現況摘要 ② 健康建議 ③ 未來 6 小時研判。"
             f"每段 2-3 句，必須引用上方數值，不可編造其他城市或數字。"
             + (
                 "若上方有「使用者個人健康檔案」，第 ② 段請額外針對此使用者個人"
@@ -1110,20 +1201,14 @@ def run_pipeline(
     _refresh_log()
     time.sleep(0.15)
 
-    # ── Discord webhook (optional) ───────────────────────────────────────
-    wh_url = st.session_state.get("discord_webhook_url", "").strip()
-    if wh_url:
-        # `critic_score=None` — Critic agent was removed in 3-agent refactor.
-        # send_discord_webhook will render "—" in the Critic-score field of
-        # the embed, or we could remove that field too (see data.py).
-        ok, wh_msg = send_discord_webhook(
-            wh_url, snapshot, None, st.session_state.data_mode,
-        )
-        push_log("C",
-                 f"Discord webhook → {'✓ 已送出' if ok else f'✗ {wh_msg}'}",
-                 to="WEBHOOK")
-    else:
-        push_log("C", "未填 Discord webhook URL · 略過外部推送", to="SYS")
+    # ── 匯出 JSON 供 Hermes(Discord bot)拉取 ────────────────────────────
+    # 拉取模型(取代舊的 webhook 推送):把這次 Pipeline 的結果寫成
+    # hermes_export/latest_aqi.json,Hermes skill 讀它在 Discord 回答。
+    try:
+        _exp_path = _write_hermes_export(snapshot)
+        push_log("C", f"✓ 已匯出 {_exp_path.name}(Agent Bot 可拉取 · {len(snapshot)} 城市)", to="EXPORT")
+    except Exception as e:
+        push_log("C", f"⚠ JSON 匯出失敗:{type(e).__name__}: {e}", to="EXPORT")
     _refresh_log()
     time.sleep(0.15)
 
@@ -1271,9 +1356,13 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
+    # ── 進階整合:Agent Bot(拉取模型)──────────────────────────────────
+    # Pipeline 跑完會把結果匯出成 hermes_export/latest_aqi.json,任何 agent bot
+    # (Hermes / OpenClaw… 皆可)當聊天平台 bot 讀它回答(依個人檔案個人化)。
+    # 不再用 webhook 推送 / cron 指令。設定與匯出狀態見 SECTION 10。
     st.markdown(
-        "<div class='tiny muted' style='line-height:1.55; margin-top:0.4rem;'>"
-        "🦞 OpenClaw 龍蝦留作排程推送 (Discord / LINE) 與個人健康記憶 — 詳見 README『進階功能』段。"
+        "<div class='tiny muted' style='line-height:1.55; margin-top:0.6rem;'>"
+        "🤖 Agent Bot 讀 <code>latest_aqi.json</code> 在聊天平台回答空品 — 詳見 SECTION 10 與 README『進階整合』段。"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -1642,14 +1731,231 @@ def _personal_profile_block() -> str:
         "other":       "其他",
         "prefer_not":  "未提供",
     }.get(st.session_state.get("user_sex", "prefer_not"), "未提供")
+    age_txt = f"{age} 歲" if age else "未提供"
     return (
         "=== 使用者個人健康檔案（請在回答中明確參考這些因素）===\n"
-        f"年齡：{age} 歲 / 性別：{sex_label} / BMI：{bmi:.1f}（{bmi_cat}）\n"
+        f"年齡：{age_txt} / 性別：{sex_label} / BMI：{bmi:.1f}（{bmi_cat}）\n"
         f"已診斷疾病：{diag_text}\n"
         f"病歷重點：{hist or '（未填）'}\n"
         "請在建議中明確提及這些因素如何影響此使用者的個人風險（例如年齡>65、有 COPD、BMI 過重等），"
         "不要僅給通用建議。\n"
     )
+
+
+def _render_persona_step1() -> None:
+    """封面「步驟 ①」個人健康檔案輸入(在啟動 Pipeline 之前)。
+
+    為什麼放在 Pipeline 之前:分析師(B)/ 預警員(C)的 LLM prompt 是在 run_pipeline()
+    期間用 _personal_profile_block() 組的。把 persona 填在「跑之前」,第一次跑就吃得到
+    →根治舊版「填完要重跑一次」的問題。填好的 persona 也會隨 Pipeline 匯出進
+    hermes_export/latest_aqi.json,供 Hermes(Discord bot)個人化回答。
+
+    所有欄位沿用既有 session_state mirror(user_*)+ widget key(user_*_input /
+    *_select),SECTION 08 改成只讀結果,不再有同名 widget,故無 key 衝突。
+    """
+    st.markdown(
+        "<div style='text-align:center; margin-top:0.2rem;'>"
+        "<div class='eyebrow' style='display:inline-block;'>"
+        "步驟 ① 個人健康檔案（選填 · 填了分析師 / 預警員 / Agent Bot 才會個人化）</div></div>",
+        unsafe_allow_html=True,
+    )
+    _pc = st.columns([1, 2, 1])[1]   # 置中欄,避免表單佔滿整個封面寬度
+    with _pc:
+        # 🎬 一鍵載入「我的」個人檔案(台中 · 19 · 過敏性鼻炎)— 期末 demo 用本人資料
+        if st.button(
+            "🎬 載入我的檔案（台中 · 19 歲 · 過敏性鼻炎）",
+            key="load_demo_profile_btn",
+            use_container_width=True,
+            help="一鍵填入本人 persona,用於期末 demo;展開下方 expander 內「🗑 清除」可復原",
+        ):
+            st.session_state.user_city          = "taichung"
+            st.session_state.user_activity      = "walking"
+            st.session_state.user_conditions    = []            # 過敏性鼻炎不在五大快選族群,留空
+            st.session_state.user_age           = 19
+            st.session_state.user_sex           = "male"
+            st.session_state.user_height_cm     = 172.0
+            st.session_state.user_weight_kg     = 65.0          # BMI ≈ 22.0(正常)
+            st.session_state.user_diagnoses     = ["J30"]       # 過敏性鼻炎
+            st.session_state.user_med_history   = "過敏性鼻炎,空品差時容易鼻塞、眼睛癢。"
+            st.session_state.user_aqi_threshold = 60            # 個人預警閾值
+            for _wk in (
+                "user_city_select", "user_activity_select", "user_aqi_threshold_input",
+                "user_age_input", "user_sex_input", "user_height_input",
+                "user_weight_input", "user_diagnoses_input", "user_med_history_input",
+            ):
+                st.session_state.pop(_wk, None)
+            st.session_state.demo_profile_loaded = True
+            st.toast("✓ 已載入你的個人檔案 — 直接按下方啟動 Pipeline 即可", icon="🎬")
+            st.rerun()
+
+        if st.session_state.get("demo_profile_loaded"):
+            st.caption(
+                "💡 已套用你的個人檔案(台中 · 19 歲 · 過敏性鼻炎 · 閾值 60)。"
+                "因為填在「跑 Pipeline 之前」,啟動後分析師 / 預警員第一次就會據此個人化,不必重跑。"
+            )
+
+        with st.expander(
+            "✍️ 展開填寫 / 編輯個人健康檔案",
+            expanded=bool(st.session_state.get("demo_profile_loaded", False)),
+        ):
+            user_city = st.selectbox(
+                "📍 你常駐城市",
+                options=[c["id"] for c in CITIES],
+                format_func=lambda cid: CITY_BY_ID[cid]["name"],
+                index=next(i for i, c in enumerate(CITIES) if c["id"] == st.session_state.user_city),
+                key="user_city_select",
+            )
+            st.session_state.user_city = user_city
+
+            activity = st.selectbox(
+                "🏃 主要戶外活動",
+                options=[a["id"] for a in OUTDOOR_ACTIVITIES],
+                format_func=lambda aid: next(f"{a['icon']} {a['label']}" for a in OUTDOOR_ACTIVITIES if a["id"] == aid),
+                index=next((i for i, a in enumerate(OUTDOOR_ACTIVITIES) if a["id"] == st.session_state.user_activity), 0),
+                key="user_activity_select",
+            )
+            st.session_state.user_activity = activity
+
+            # 不再用「五大敏感族群」分桶 —— 改成你個人的 AQI 預警閾值(個人化)。
+            # 健康狀況改由下方「已診斷疾病(ICD-10)」+ 病歷重點 + 年齡 表達。
+            st.session_state.user_aqi_threshold = st.number_input(
+                "⚠ 我的 AQI 預警閾值",
+                min_value=20, max_value=300, step=10,
+                value=int(st.session_state.get("user_aqi_threshold", 100)),
+                key="user_aqi_threshold_input",
+                help="你個人覺得「超過就該注意」的 AQI;用來算下方『個人化健康指數』與主畫面預警橫幅。"
+                     "一般成人約 100,呼吸道 / 心血管敏感可設低些(如 60)。",
+            )
+
+            st.markdown("<div style='height:0.4rem;'></div>", unsafe_allow_html=True)
+            st.info(
+                "🔒 **隱私說明** — 個人健康檔案只存在你本機 session。跑 Pipeline 時會:"
+                "(a) 作為 prompt context 送到你**自己設定**的 LLM 雲端 API(Anthropic / Gemini / "
+                "OpenAI / MiniMax)做個人化分析;(b) 寫進本機 `hermes_export/latest_aqi.json`,供你"
+                "**自架的 Agent Bot(聊天平台)** 讀取回答。**不會傳給專案作者或任何第三方**;想移除按下方「🗑 清除」。"
+            )
+
+            # 年齡 + 性別
+            col_age, col_sex = st.columns(2)
+            with col_age:
+                st.session_state.user_age = st.number_input(
+                    "👤 年齡",
+                    min_value=0, max_value=120, step=1,
+                    value=int(st.session_state.user_age),
+                    key="user_age_input",
+                    help="0 = 不提供(分析師 / 預警員不會注入年齡);填實際年齡(如 72)才會據此個人化",
+                )
+            with col_sex:
+                _sex_opts = ["prefer_not", "female", "male", "other"]
+                _sex_labels = {"prefer_not": "不提供", "female": "女", "male": "男", "other": "其他"}
+                st.session_state.user_sex = st.selectbox(
+                    "⚧ 性別",
+                    options=_sex_opts,
+                    index=_sex_opts.index(st.session_state.user_sex) if st.session_state.user_sex in _sex_opts else 0,
+                    format_func=lambda s: _sex_labels.get(s, s),
+                    key="user_sex_input",
+                )
+
+            # 身高 + 體重 + BMI
+            col_h, col_w = st.columns(2)
+            with col_h:
+                st.session_state.user_height_cm = st.number_input(
+                    "📏 身高 (cm)",
+                    min_value=80.0, max_value=230.0, step=0.5,
+                    value=float(st.session_state.user_height_cm),
+                    key="user_height_input",
+                )
+            with col_w:
+                st.session_state.user_weight_kg = st.number_input(
+                    "⚖ 體重 (kg)",
+                    min_value=20.0, max_value=200.0, step=0.5,
+                    value=float(st.session_state.user_weight_kg),
+                    key="user_weight_input",
+                )
+            _bmi, _bmi_cat = _calc_bmi(
+                st.session_state.user_height_cm, st.session_state.user_weight_kg
+            )
+            st.caption(f"BMI：**{_bmi:.1f}**（{_bmi_cat}）")
+
+            # ICD-10
+            st.session_state.user_diagnoses = st.multiselect(
+                "🏥 已診斷疾病（ICD-10，可複選）",
+                options=[d["code"] for d in USER_ICD10_OPTIONS],
+                default=st.session_state.user_diagnoses,
+                format_func=lambda code: next(
+                    f"{d['icon']} {d['label']} （{d['code']}）"
+                    for d in USER_ICD10_OPTIONS if d["code"] == code
+                ),
+                key="user_diagnoses_input",
+                help="勾選你已被醫師確診的疾病。這會讓 AI 助理 / 預警員 / Agent Bot 針對你的疾病給專屬建議。",
+            )
+
+            # 病歷重點
+            st.session_state.user_med_history = st.text_area(
+                "📝 病歷重點（自填，建議 100-300 字）",
+                value=st.session_state.user_med_history,
+                height=120,
+                placeholder=(
+                    "例：2020 確診 COPD GOLD II 級，FEV1 65%；2022 心臟支架手術；"
+                    "目前服用 Spiriva + Aspirin。空氣品質差時偶有咳嗽與胸悶。"
+                ),
+                key="user_med_history_input",
+            )
+
+            # 個人病歷檔上傳
+            _uploaded_meds = st.file_uploader(
+                "📎 上傳個人病歷文件（可選，PDF / TXT / MD）",
+                type=["pdf", "txt", "md"],
+                accept_multiple_files=True,
+                key="user_med_files_uploader",
+                help=(
+                    "上傳的內容會被切成段落加入 RAG 知識庫，並標記為「個人病歷」"
+                    "（在檢索時享有 1.4× 加權，AI 助理 / Pipeline 會優先參考）。"
+                ),
+            )
+            if _uploaded_meds:
+                _already = {d["name"] for d in st.session_state.user_med_files}
+                for _mf in _uploaded_meds:
+                    if _mf.name in _already:
+                        continue
+                    _n = _ingest_personal_medical_file(_mf)
+                    if _n > 0:
+                        st.success(f"✓ 已加入「{_mf.name}」({_n} 段) 為個人病歷 chunks")
+            if st.session_state.user_med_files:
+                st.caption(
+                    "已上傳病歷：" + "、".join(
+                        f"`{d['name']}`({d['n_chunks']} 段)"
+                        for d in st.session_state.user_med_files
+                    )
+                )
+
+            # 清除按鈕
+            if st.button(
+                "🗑 清除個人健康資料",
+                help="把上方所有欄位回預設,並從 RAG 池移除所有 scope=personal 的 chunks",
+                key="user_clear_health_btn",
+            ):
+                st.session_state.user_age         = 0   # 0 = 未提供
+                st.session_state.user_sex         = "prefer_not"
+                st.session_state.user_height_cm   = 165.0
+                st.session_state.user_weight_kg   = 60.0
+                st.session_state.user_diagnoses   = []
+                st.session_state.user_med_history = ""
+                st.session_state.user_med_files   = []
+                st.session_state.user_aqi_threshold = 100   # 回一般成人預設
+                st.session_state.demo_profile_loaded = False
+                st.session_state.rag_chunks = [
+                    c for c in st.session_state.rag_chunks
+                    if c.get("scope") != "personal"
+                ]
+                for _wk in (
+                    "user_age_input", "user_sex_input", "user_height_input",
+                    "user_weight_input", "user_diagnoses_input", "user_med_history_input",
+                    "user_aqi_threshold_input",
+                ):
+                    st.session_state.pop(_wk, None)
+                st.success("✓ 已清除個人健康資料與 personal RAG chunks")
+                st.rerun()
 
 
 def _build_chat_context() -> str:
@@ -1967,12 +2273,21 @@ def _scroll_chat_to_latest() -> None:
 # 整段流程只 rerun 這個 fragment,不影響整個 app。沒有 fragment 的話,LLM
 # 跑那 25-60 秒 Streamlit 會把整頁標成 running 狀態,儀表板的圖表 / 互動元件
 # 全部變灰,使用者抱怨「ai助理回覆時網頁不要暗掉」就是這個。
-# 內部呼叫 st.rerun() 預設 scope="fragment",剛好只重跑這塊。
+# 開 / 收用 on_click callback(不用回傳值 + st.rerun):callback 會在 fragment 重跑
+# 「之前」就改好 chat_expanded,重跑時直接畫對的分支,只跑一次 rerun。
 #
 # 重要:fragment 真正的「呼叫點」在主腳本最下方(封面區 + Pipeline 觸發檢查之後),
 # 這裡只是 def。把呼叫往後挪,讓 cover/sidebar 的 Pipeline 按鈕按下後,
 # 先設好 `chat_expanded=False`,fragment 才會 render FAB(而非聊天 panel),
 # 避免 Pipeline 30-60 秒阻塞期間,聊天 panel 還掛在畫面上但點 X 無反應。
+def _set_chat_open() -> None:
+    st.session_state.chat_expanded = True
+
+
+def _set_chat_closed() -> None:
+    st.session_state.chat_expanded = False
+
+
 @st.fragment
 def _floating_chat_fragment() -> None:
     if st.session_state.chat_expanded:
@@ -1993,9 +2308,10 @@ def _floating_chat_fragment() -> None:
                 "</div>",
                 unsafe_allow_html=True,
             )
-            if st.button("✕", key="chat_close", help="收起聊天面板"):
-                st.session_state.chat_expanded = False
-                st.rerun()
+            # on_click 在 fragment 重跑「之前」就把 chat_expanded 設 False,因此重跑時
+            # 直接走 else 分支畫 FAB,panel(含捲動 iframe)完全不再渲染 → 一次 rerun
+            # 收掉,避免「先重畫 panel 再切換」造成的關閉延遲與文字殘留。
+            st.button("✕", key="chat_close", help="收起聊天面板", on_click=_set_chat_closed)
             _render_chat_panel()
         # 注意:故意放在 `with st.container(key="floating_chat")` 區塊「之外」,
         # 這樣捲動用的 0 高度 iframe 不會變成 panel 的 flex 子元素去擾亂版面,
@@ -2003,9 +2319,7 @@ def _floating_chat_fragment() -> None:
         _scroll_chat_to_latest()
     else:
         with st.container(key="fab_container"):
-            if st.button("💬  AI 助理", key="fab_chat_btn", type="secondary"):
-                st.session_state.chat_expanded = True
-                st.rerun()
+            st.button("💬  AI 助理", key="fab_chat_btn", type="secondary", on_click=_set_chat_open)
 
 
 # NOTE: _floating_chat_fragment() is now called near the end of the script
@@ -2054,12 +2368,12 @@ st.markdown(
       <div class='cover-title'>LobsterAQI 監控平台</div>
       <div class='cover-subtitle'>
         三個 agent 接力即時採集 EPA + 民生公共物聯網資料，由分析師整合 RAG 文獻產出風險研判，
-        預警員給出敏感族群建議。按下啟動鍵，整套儀表板就會在你面前展開。
+        預警員依你的個人健康檔案給個人化建議。按下啟動鍵，整套儀表板就會在你面前展開。
       </div>
       <div class='cover-features'>
         <div class='cover-feature'><span class='ico'>📡</span> 採集者 · EPA + 民生公共物聯網</div>
         <div class='cover-feature'><span class='ico'>🧠</span> 分析師 · LLM + RAG</div>
-        <div class='cover-feature'><span class='ico'>🏥</span> 預警員 · 敏感族群建議</div>
+        <div class='cover-feature'><span class='ico'>🏥</span> 預警員 · 個人化健康建議</div>
       </div>
       <div class='cover-status'>{data_pill}{oc_pill}{pipeline_pill}</div>
     </div>
@@ -2086,6 +2400,11 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# ── 步驟 ① 個人健康檔案(在啟動 Pipeline「之前」填)──────────────────────────
+# 填好(或按 🎬 載入範例)再啟動 → 分析師 / 預警員第一次跑就用 persona,且會匯出
+# 進 latest_aqi.json 供 Hermes 拉取。SECTION 08 只負責呈現結果。
+_render_persona_step1()
 
 cL, cC, cR = st.columns([3, 2, 3])
 with cC:
@@ -2284,6 +2603,15 @@ st.markdown("<br>", unsafe_allow_html=True)
 if not st.session_state.pipeline_done or snapshot is None:
     st.stop()
 
+# ── 期末 demo 數據來源切換 ──────────────────────────────────────────────────
+# 若偵測到 scripts/seed_demo_data.py 灌入的 demo 資料(放在隔離的 source='demo'),
+# 所有「歷史 AQI」讀取改讀 demo source —— 這樣使用者即使在 demo 中途重跑真實
+# Pipeline(會寫 source='cams_hourly'),demo 的 7 天趨勢 / 比上週徽章 / 症狀散點
+# 也不會被覆蓋。沒有 demo 資料時讀真實 'cams_hourly'(零回歸)。
+_demo_on   = tsdb.has_demo_data()
+_aqi_src   = ["demo"] if _demo_on else ["cams_hourly"]
+_diary_src = "demo" if _demo_on else "cams_hourly"
+
 # =============================================================================
 # SECTION · 02 即時 AQI 主儀表板 (MAIN DASHBOARD)
 # =============================================================================
@@ -2422,7 +2750,7 @@ if not _my_row.empty:
 
     # 歷史對比:本週(168h)平均 vs 上週(同窗寬)平均
     try:
-        _this_avg, _prev_avg, _this_n, _prev_n = tsdb.city_period_avg(_my_city_id, this_hours=168)
+        _this_avg, _prev_avg, _this_n, _prev_n = tsdb.city_period_avg(_my_city_id, this_hours=168, sources=_aqi_src)
     except Exception:
         _this_avg, _prev_avg, _this_n, _prev_n = None, None, 0, 0
     if _this_avg is not None and _prev_avg is not None and _prev_avg > 0:
@@ -2676,7 +3004,7 @@ with _heat_tab_cams:
 # pipeline run) and shows the cities with the highest peak AQI. Gives the
 # user a "where did air quality get bad this week, even if it's clean now"
 # view, which the current-snapshot ranking can't provide.
-_week_top = tsdb.top_cities_by_period(hours=168, top_n=10)
+_week_top = tsdb.top_cities_by_period(hours=168, top_n=10, sources=_aqi_src)
 st.markdown(
     "<div class='eyebrow' style='margin-top:1.2rem;'>📊 過去 7 天 AQI 紀錄板（本機時序快取）</div>",
     unsafe_allow_html=True,
@@ -3045,226 +3373,12 @@ st.markdown(
 per1 = st.container()
 
 with per1:
-    st.markdown("<div class='eyebrow'>個人設定</div>", unsafe_allow_html=True)
-
-    user_city = st.selectbox(
-        "📍 你常駐城市",
-        options=[c["id"] for c in CITIES],
-        format_func=lambda cid: CITY_BY_ID[cid]["name"],
-        index=next(i for i, c in enumerate(CITIES) if c["id"] == st.session_state.user_city),
-        key="user_city_select",
-    )
-    st.session_state.user_city = user_city
-
-    activity = st.selectbox(
-        "🏃 主要戶外活動",
-        options=[a["id"] for a in OUTDOOR_ACTIVITIES],
-        format_func=lambda aid: next(f"{a['icon']} {a['label']}" for a in OUTDOOR_ACTIVITIES if a["id"] == aid),
-        index=next((i for i, a in enumerate(OUTDOOR_ACTIVITIES) if a["id"] == st.session_state.user_activity), 0),
-        key="user_activity_select",
-    )
-    st.session_state.user_activity = activity
-
-    conds = st.multiselect(
-        "🏥 健康狀況（可複選）",
-        options=[g["id"] for g in SENSITIVE_GROUPS],
-        default=st.session_state.user_conditions,
-        format_func=lambda gid: next(f"{g['icon']} {g['label']}" for g in SENSITIVE_GROUPS if g["id"] == gid),
-        key="user_cond_select",
-    )
-    st.session_state.user_conditions = conds
-
-    # ── 進階個人健康檔案(RAG 個人化升級)──────────────────────────────────
-    # 在既有三個快選欄位之後,加入一個 expander,允許使用者填入更精細的健康資料:
-    #   年齡 / 性別 / 身高 / 體重(BMI) / 已診斷疾病(ICD-10) / 病歷重點 / 病歷上傳
-    # 這些資料會在「💾 同步至 OpenClaw 記憶體」時寫進本機 MEMORY.md,並在每次
-    # LLM 呼叫(AI 助理、分析師、預警員)時注入 prompt,讓回答能引用個人因素。
-    # 使用者完全不填(預設值)時,_personal_profile_block() 回空字串,prompt 與
-    # 升級前完全一致 → 零回歸。
-    # ────────────────────────────────────────────────────────────────────────
-    with st.expander("🩺 進階個人健康檔案（用於 RAG 個人化）", expanded=False):
-        st.info(
-            "🔒 **隱私說明** — 這些資料會在你按「💾 同步至 OpenClaw 記憶體」時寫入本機"
-            " `~/.openclaw/agents/*/MEMORY.md`(純文字)。當你向 AI 助理提問或跑 Pipeline 時，"
-            "這些資料會作為 prompt context 送到你**自己設定**的 LLM 雲端 API（Anthropic / "
-            "Gemini / OpenAI / MiniMax）。**不會傳給專案作者或任何第三方**；想移除請按下方"
-            "「🗑 清除個人健康資料」。"
-        )
-
-        # 年齡 + 性別(兩欄並排)
-        col_age, col_sex = st.columns(2)
-        with col_age:
-            st.session_state.user_age = st.number_input(
-                "👤 年齡",
-                min_value=0, max_value=120, step=1,
-                value=int(st.session_state.user_age),
-                key="user_age_input",
-            )
-        with col_sex:
-            _sex_opts = ["prefer_not", "female", "male", "other"]
-            _sex_labels = {"prefer_not": "不提供", "female": "女", "male": "男", "other": "其他"}
-            st.session_state.user_sex = st.selectbox(
-                "⚧ 性別",
-                options=_sex_opts,
-                index=_sex_opts.index(st.session_state.user_sex) if st.session_state.user_sex in _sex_opts else 0,
-                format_func=lambda s: _sex_labels.get(s, s),
-                key="user_sex_input",
-            )
-
-        # 身高 + 體重(兩欄並排)+ BMI 即時顯示
-        col_h, col_w = st.columns(2)
-        with col_h:
-            st.session_state.user_height_cm = st.number_input(
-                "📏 身高 (cm)",
-                min_value=80.0, max_value=230.0, step=0.5,
-                value=float(st.session_state.user_height_cm),
-                key="user_height_input",
-            )
-        with col_w:
-            st.session_state.user_weight_kg = st.number_input(
-                "⚖ 體重 (kg)",
-                min_value=20.0, max_value=200.0, step=0.5,
-                value=float(st.session_state.user_weight_kg),
-                key="user_weight_input",
-            )
-        _bmi, _bmi_cat = _calc_bmi(
-            st.session_state.user_height_cm, st.session_state.user_weight_kg
-        )
-        st.caption(f"BMI：**{_bmi:.1f}**（{_bmi_cat}）")
-
-        # ICD-10 multiselect
-        st.session_state.user_diagnoses = st.multiselect(
-            "🏥 已診斷疾病（ICD-10，可複選）",
-            options=[d["code"] for d in USER_ICD10_OPTIONS],
-            default=st.session_state.user_diagnoses,
-            format_func=lambda code: next(
-                f"{d['icon']} {d['label']} （{d['code']}）"
-                for d in USER_ICD10_OPTIONS if d["code"] == code
-            ),
-            key="user_diagnoses_input",
-            help="勾選你已被醫師確診的疾病。這會讓 AI 助理 / 預警員針對你的疾病給專屬建議。",
-        )
-
-        # 病歷重點 text_area
-        st.session_state.user_med_history = st.text_area(
-            "📝 病歷重點（自填，建議 100-300 字）",
-            value=st.session_state.user_med_history,
-            height=120,
-            placeholder=(
-                "例：2020 確診 COPD GOLD II 級，FEV1 65%；2022 心臟支架手術；"
-                "目前服用 Spiriva + Aspirin。空氣品質差時偶有咳嗽與胸悶。"
-            ),
-            key="user_med_history_input",
-        )
-
-        # 個人病歷檔案上傳(走 _ingest_personal_medical_file → scope="personal")
-        _uploaded_meds = st.file_uploader(
-            "📎 上傳個人病歷文件（可選，PDF / TXT / MD）",
-            type=["pdf", "txt", "md"],
-            accept_multiple_files=True,
-            key="user_med_files_uploader",
-            help=(
-                "上傳的內容會被切成段落加入 RAG 知識庫，並標記為「個人病歷」"
-                "（在檢索時享有 1.4× 加權，AI 助理 / Pipeline 會優先參考）。"
-            ),
-        )
-        if _uploaded_meds:
-            _already = {d["name"] for d in st.session_state.user_med_files}
-            for _mf in _uploaded_meds:
-                if _mf.name in _already:
-                    continue  # 避免同一檔重複上傳造成 chunk 暴增
-                _n = _ingest_personal_medical_file(_mf)
-                if _n > 0:
-                    st.success(f"✓ 已加入「{_mf.name}」({_n} 段) 為個人病歷 chunks")
-        if st.session_state.user_med_files:
-            st.caption(
-                "已上傳病歷：" + "、".join(
-                    f"`{d['name']}`({d['n_chunks']} 段)"
-                    for d in st.session_state.user_med_files
-                )
-            )
-
-        # 清除按鈕
-        if st.button(
-            "🗑 清除個人健康資料",
-            help="把上方所有欄位回預設,並從 RAG 池移除所有 scope=personal 的 chunks",
-            key="user_clear_health_btn",
-        ):
-            st.session_state.user_age         = 30
-            st.session_state.user_sex         = "prefer_not"
-            st.session_state.user_height_cm   = 165.0
-            st.session_state.user_weight_kg   = 60.0
-            st.session_state.user_diagnoses   = []
-            st.session_state.user_med_history = ""
-            st.session_state.user_med_files   = []
-            st.session_state.rag_chunks = [
-                c for c in st.session_state.rag_chunks
-                if c.get("scope") != "personal"
-            ]
-            st.success("✓ 已清除個人健康資料與 personal RAG chunks")
-            st.rerun()
-
-    # Save profile to OpenClaw agents' MEMORY.md so they remember between sessions
-    if st.button("💾 同步至 OpenClaw 記憶體", help="把上方設定寫進 analyst / advisor 的 MEMORY.md，下次它們會記得你"):
-        from pathlib import Path
-        from datetime import datetime as _dt
-        cond_labels = [
-            next(g["label"] for g in SENSITIVE_GROUPS if g["id"] == cid) for cid in conds
-        ]
-        activity_label = next(a["label"] for a in OUTDOOR_ACTIVITIES if a["id"] == activity)
-        # ── RAG 個人化升級:擴充 MEMORY.md 為 5 區塊 ─────────────────────
-        _bmi_m, _bmi_cat_m = _calc_bmi(
-            st.session_state.user_height_cm, st.session_state.user_weight_kg
-        )
-        _sex_label_m = {
-            "female": "女", "male": "男", "other": "其他", "prefer_not": "未提供"
-        }.get(st.session_state.user_sex, "未提供")
-        _icd_lines = "\n".join(
-            f"  - {d['icon']} {d['label']} ({d['code']})"
-            for d in USER_ICD10_OPTIONS
-            if d["code"] in st.session_state.user_diagnoses
-        ) or "  - 無"
-        _file_lines = "\n".join(
-            f"  - {d['name']}（{d['n_chunks']} chunks）"
-            for d in st.session_state.user_med_files
-        ) or "  - （無）"
-        _hist_text = (st.session_state.user_med_history or "").strip() or "（未填）"
-
-        memory_text = (
-            "# MEMORY.md — LobsterAQI User Profile\n\n"
-            "## 基本資料\n"
-            f"- 年齡:{st.session_state.user_age} 歲\n"
-            f"- 性別:{_sex_label_m}\n"
-            f"- 身高 / 體重:{st.session_state.user_height_cm:.0f} cm / "
-            f"{st.session_state.user_weight_kg:.1f} kg(BMI {_bmi_m:.1f},{_bmi_cat_m})\n\n"
-            "## 常駐城市與活動\n"
-            f"- 常駐城市:{CITY_BY_ID[user_city]['name']}({user_city})\n"
-            f"- 健康狀況(快選五大群):{', '.join(cond_labels) if cond_labels else '無'}\n"
-            f"- 主要戶外活動:{activity_label}\n\n"
-            "## 已診斷疾病(ICD-10)\n"
-            f"{_icd_lines}\n\n"
-            "## 病歷重點(使用者自填)\n"
-            f"{_hist_text}\n\n"
-            "## 上傳的病歷文件\n"
-            f"{_file_lines}\n\n"
-            "## How to use this memory\n"
-            "下次使用者問問題時,agent 應主動參考其年齡、BMI、ICD-10 診斷、病歷重點,"
-            "給出**符合該個人風險**的具體建議(例如:對 COPD 患者 PM2.5 > 35 即建議室內;"
-            "對 BMI>30 高血壓患者強調心血管警訊)。不要每次都重新詢問背景。"
-            "回答中提到城市時優先選使用者所在城市。\n"
-            f"- 最後更新:{_dt.now().strftime('%Y-%m-%d %H:%M')}\n"
-        )
-        written = []
-        for agent_id in ("analyst", "advisor"):
-            try:
-                p = Path.home() / ".openclaw" / "agents" / agent_id / "agent" / "MEMORY.md"
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(memory_text, encoding="utf-8")
-                written.append(agent_id)
-            except Exception as e:
-                st.warning(f"寫入 {agent_id} MEMORY.md 失敗：{type(e).__name__}: {e}")
-        if written:
-            st.success(f"✓ 已同步至 OpenClaw {' + '.join(written)} 的 MEMORY.md")
+    # 個人設定已移到封面「步驟 ①」(在跑 Pipeline 之前填,分析師第一次跑就吃得到)。
+    # 這裡只呈現「結果」,直接讀封面填好的 session_state,不再放任何輸入 widget。
+    user_city = st.session_state.get("user_city", "taipei")
+    conds     = st.session_state.get("user_conditions", [])
+    activity  = st.session_state.get("user_activity", "running")
+    st.caption("↑ 個人健康檔案在封面「步驟 ①」 — 捲到頁面最上方可編輯 / 載入 demo 範例 / 清除")
 
     # Highlight relevant info
     my_row = snapshot[snapshot["city_id"] == user_city].iloc[0]
@@ -3288,100 +3402,59 @@ with per1:
     )
 
 # ── 個人化敏感族群指數卡 (P1 #3) ─────────────────────────────────────────
-# 根據使用者勾選的健康狀況(SENSITIVE_GROUPS),計算「以你目前城市的 AQI,
-# 你今天可以在戶外活動幾小時 / 應採取什麼防護」 — 與 SECTION · 07 的
-# 「對所有人通用」建議不同,這裡的數字真正依使用者輸入而變化。
-#
-# 計算邏輯:
-#   每個敏感族群有一個「容忍 AQI」門檻(GROUP_AQI_LIMIT 字典):
-#     - 老人 / 心血管:60(較嚴格,稍微偏高就要減少戶外)
-#     - 氣喘 / 孕婦:50(最嚴格,WHO 推薦)
-#     - 幼童:70
-#   safe_hours = max(0, 12 - max(0, (current_aqi - limit)) * 0.15)
-#     - AQI 低於門檻:可活動 12 小時(全天)
-#     - 每超過 10 點:扣 1.5 小時戶外時間
-#   防護等級依差距:< 0 → 「正常活動」;0-30 → 「戴口罩」;30-60 → 「N95 + 短時間」;> 60 → 「室內為主」
-if conds:
-    st.markdown("<div class='eyebrow' style='margin-top:1.2rem;'>🩺 你的個人化健康指數</div>", unsafe_allow_html=True)
-    st.markdown(
-        f"<div class='tiny muted' style='margin-bottom:0.5rem;'>"
-        f"基於 <b>{CITY_BY_ID[user_city]['name']}</b> 目前 AQI <b>{my_row['aqi']:.0f}</b>,"
-        f"計算每個你勾選的敏感族群「今日可戶外活動時數」與防護建議</div>",
-        unsafe_allow_html=True,
-    )
+# 你的個人化健康指數(以「你這個人」為單位,不再分五大族群)
+# ───────────────────────────────────────────────────────────────────────────
+# 改版理由:本平台是「個人化」,不再針對老人/幼童/氣喘/心血管/孕婦 五大族群分桶。
+# 改成針對「你本人」算一張卡 —— 以你自己設定的 AQI 預警閾值(user_aqi_threshold)
+# 為容忍門檻,並把年齡 / BMI / 已診斷疾病列為依據。不需要選族群,一定會顯示。
+#   safe_hours = max(0, 12 - max(0, current_aqi - threshold) * 0.15)
+#   防護等級依超出量:≤0 正常 / ≤30 口罩 / ≤60 N95 短時間 / >60 室內為主
+_thr = int(st.session_state.get("user_aqi_threshold", 100))
+_age_v = int(st.session_state.get("user_age", 0) or 0)
+_dx_labels = [
+    d["label"] for d in USER_ICD10_OPTIONS
+    if d["code"] in (st.session_state.get("user_diagnoses", []) or [])
+]
+_bmi_v, _bmi_cat_v = _calc_bmi(
+    st.session_state.get("user_height_cm", 0) or 0,
+    st.session_state.get("user_weight_kg", 0) or 0,
+)
+_factor_bits = []
+if _age_v:
+    _factor_bits.append(f"{_age_v} 歲")
+if _dx_labels:
+    _factor_bits.append("、".join(_dx_labels))
+if st.session_state.get("user_height_cm") and st.session_state.get("user_weight_kg"):
+    _factor_bits.append(f"BMI {_bmi_v:.1f}")
+_factor_text = " · ".join(_factor_bits) if _factor_bits else "尚未填個人健康檔案(暫用一般成人標準)"
 
-    GROUP_AQI_LIMIT = {
-        "elderly":        60,   # 老人(較嚴)
-        "children":       70,   # 幼童
-        "asthma":         50,   # 氣喘(最嚴)
-        "cardiovascular": 60,   # 心血管
-        "pregnant":       50,   # 孕婦(最嚴)
-    }
-    GROUP_ADVICE_TIER = {
-        # tier_idx -> (color, action_text)
-        0: ("#00e676", "✓ 可正常戶外活動,維持基本衛生即可"),
-        1: ("#ffd93d", "🧣 建議配戴一般口罩,避免長時間激烈運動"),
-        2: ("#ff8c42", "😷 建議 N95/KF94,單次戶外不超過 1 小時"),
-        3: ("#ff4757", "🚫 強烈建議留在室內,必要時開啟空氣清淨機"),
-    }
+current_aqi = float(my_row["aqi"])
+excess = max(0.0, current_aqi - _thr)
+safe_hours = max(0.0, 12.0 - excess * 0.15)
+if   excess <= 0:  _pcolor, _action = "#00e676", "✓ 可正常戶外活動,維持基本衛生即可"
+elif excess <= 30: _pcolor, _action = "#ffd93d", "🧣 建議配戴一般口罩,避免長時間激烈運動"
+elif excess <= 60: _pcolor, _action = "#ff8c42", "😷 建議 N95/KF94,單次戶外不超過 1 小時"
+else:              _pcolor, _action = "#ff4757", "🚫 強烈建議留在室內,必要時開啟空氣清淨機"
 
-    cards_html = []
-    current_aqi = float(my_row["aqi"])
-    for gid in conds:
-        group = next(g for g in SENSITIVE_GROUPS if g["id"] == gid)
-        limit = GROUP_AQI_LIMIT.get(gid, 60)
-        excess = max(0, current_aqi - limit)
-        safe_hours = max(0.0, 12.0 - excess * 0.15)
-        # 決定防護等級
-        if excess <= 0:
-            tier = 0
-        elif excess <= 30:
-            tier = 1
-        elif excess <= 60:
-            tier = 2
-        else:
-            tier = 3
-        color, action = GROUP_ADVICE_TIER[tier]
-
-        cards_html.append(
-            f"<div class='glass-card' style='border-color:{color}55; "
-            f"background:linear-gradient(135deg, {color}10, rgba(15,24,48,0.5)); min-width:220px;'>"
-            f"<div style='display:flex; align-items:center; gap:0.6rem; margin-bottom:0.5rem;'>"
-            f"<div style='font-size:1.6rem;'>{group['icon']}</div>"
-            f"<div>"
-            f"<div style='font-weight:800; font-size:0.95rem;'>{group['label']}</div>"
-            f"<div class='tiny muted'>容忍 AQI ≤ {limit}</div>"
-            f"</div>"
-            f"</div>"
-            f"<div style='font-family:JetBrains Mono; font-size:1.8rem; font-weight:900; "
-            f"color:{color}; line-height:1; text-shadow:0 0 12px {color}44;'>"
-            f"{safe_hours:.1f}<span style='font-size:0.85rem; color:#8b95a8; margin-left:0.2rem;'>h</span>"
-            f"</div>"
-            f"<div class='tiny muted' style='margin:0.2rem 0 0.5rem 0;'>今日建議戶外時數</div>"
-            f"<div style='font-size:0.82rem; line-height:1.45; color:{color};'>"
-            f"{action}"
-            f"</div>"
-            f"</div>"
-        )
-
-    st.markdown(
-        f"<div style='display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0.7rem;'>"
-        + "".join(cards_html) +
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-else:
-    # 未勾選任何敏感族群 — 用提示 nudge 使用者去 sidebar 設定
-    st.markdown(
-        "<div class='glass-card' style='margin-top:1.2rem; text-align:center;'>"
-        "<div class='eyebrow'>🩺 個人化健康指數</div>"
-        "<div class='tiny muted' style='margin-top:0.4rem;'>"
-        "在左側「健康狀況」勾選你 / 家人符合的敏感族群,"
-        "這裡會自動計算每個族群「今日可戶外活動時數」與防護等級。"
-        "</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+st.markdown("<div class='eyebrow' style='margin-top:1.2rem;'>🩺 你的個人化健康指數</div>", unsafe_allow_html=True)
+st.markdown(
+    f"<div class='glass-card' style='border-color:{_pcolor}55; "
+    f"background:linear-gradient(135deg, {_pcolor}10, rgba(15,24,48,0.5));'>"
+    f"<div class='tiny muted' style='margin-bottom:0.55rem;'>"
+    f"依據:{escape(_factor_text)} · 你的 AQI 預警閾值 {_thr} · "
+    f"{escape(CITY_BY_ID[user_city]['name'])} 目前 AQI {current_aqi:.0f}</div>"
+    f"<div style='display:flex; align-items:baseline; gap:0.6rem;'>"
+    f"<div style='font-family:JetBrains Mono; font-size:2.4rem; font-weight:900; color:{_pcolor}; "
+    f"line-height:1; text-shadow:0 0 14px {_pcolor}55;'>{safe_hours:.1f}"
+    f"<span style='font-size:0.9rem; color:#8b95a8; margin-left:0.2rem;'>h</span></div>"
+    f"<div class='tiny muted'>今日建議戶外時數</div>"
+    f"</div>"
+    f"<div style='margin-top:0.6rem; font-size:0.9rem; line-height:1.5; color:{_pcolor};'>{_action}</div>"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+if not _factor_bits:
+    st.caption("💡 在封面「步驟①」填年齡 / 已診斷疾病 / 調整 AQI 閾值,這張卡會更貼近你本人。")
 
 # ── 你城市的本週 AQI 歷史趨勢（本機 SQLite 時序快取）─────────────────────
 # Pulls the user's home city's hourly AQI over the past 168h from the
@@ -3392,10 +3465,15 @@ st.markdown(
     f"<b style='color:#00d9ff;'>{escape(CITY_BY_ID[user_city]['name'])}</b> 的本週 AQI 紀錄</div>",
     unsafe_allow_html=True,
 )
-_my_hist = tsdb.city_history(user_city, hours=168, sources=["cams_hourly"])
+_my_hist = tsdb.city_history(user_city, hours=168, sources=_aqi_src)
 _this_avg, _prev_avg, _this_n, _prev_n = tsdb.city_period_avg(
-    user_city, this_hours=168, sources=["cams_hourly"],
+    user_city, this_hours=168, sources=_aqi_src,
 )
+if _demo_on:
+    st.caption(
+        "🎬 顯示預載 demo 數據(隔離於 source='demo';跑真實 Pipeline 不會覆蓋。"
+        "清除請執行 `scripts/seed_demo_data.py --clear`)"
+    )
 if _my_hist is None or _my_hist.empty:
     st.info(
         "本機時序快取尚無這個城市的歷史 — 跑一次 Pipeline 會自動拉 CAMS 過去 7 天回來。"
@@ -3517,7 +3595,7 @@ with diary_c1:
 
 with diary_c2:
     st.markdown("<div class='eyebrow'>30 天症狀 vs AQI 對照</div>", unsafe_allow_html=True)
-    _diary_aqi = tsdb.diary_with_aqi(user_city, days=30)
+    _diary_aqi = tsdb.diary_with_aqi(user_city, days=30, source=_diary_src)
 
     if _diary_aqi.empty:
         st.info(
@@ -3623,202 +3701,67 @@ with diary_c2:
 
 
 # =============================================================================
-# SECTION · 個人訂閱 (PERSONAL SUBSCRIPTION) — 原 pages/3_個人訂閱.py 的內容
+# SECTION · 10 · Hermes Discord Bot(拉取模型)
 # =============================================================================
-# 2026-05-13 從獨立分頁併入主 app,讓 sidebar 保持乾淨,使用者不必跳轉。
-# 2026-05-21 改版:拿掉「敏感族群多選」,改成使用者只需填基本欄位
-# (城市 / 推送模式 / AQI 閾值 / 推送頻道 / 頻率),個人化資料一律從
-# Section 08「進階個人健康檔案」帶,沒填也 OK(會給通用建議)。
-#
-# 注意:OpenClaw cron 是用 `--session isolated`,該 session 不會載入
-# MEMORY.md(見 openclaw_agents/analyst/AGENTS.md:17)。因此我們在送出時
-# 把 _personal_profile_block() 內容直接 inline 塞進 --message,讓 cron
-# 觸發的 analyst 也能拿到使用者檔案,不必依賴 MEMORY.md 機制。
+# 不再「推送」(舊版:Discord webhook / 產生 openclaw cron 指令)。改成「拉取」:
+# Pipeline 跑完把結果寫進 hermes_export/latest_aqi.json,你自架的 Hermes(Discord
+# bot)讀它在頻道回答 —— 含封面步驟①填的個人健康檔案(persona),回答會個人化。
+# 本區只顯示「匯出狀態」與「怎麼把 Hermes 設成 bot」,不再有表單 / cron 指令。
 # =============================================================================
 st.markdown("<a id='subscribe'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow' style='margin-top:1.5rem; display:inline-block;'>SECTION · 10</span>", unsafe_allow_html=True)
-st.markdown("<div class='section-title'>個人訂閱 · 把預警送到你的 Discord / LINE</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Agent Bot · 讓 bot 來這裡抓資料</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-sub'>填好下面表單，會自動產生一條 OpenClaw cron 指令。"
-    "可以複製貼到 terminal 跑，也可以直接按「立即註冊」讓本頁面幫你執行。</div>",
+    "<div class='section-sub'>不用 webhook、不用排程指令。Pipeline 跑完會把結果匯出成 "
+    "<code>hermes_export/latest_aqi.json</code>,任何 agent bot(Hermes / OpenClaw… 皆可)"
+    "在聊天平台(Discord / LINE / Slack…)讀它回答(自動帶上你在封面步驟①填的個人健康檔案)。</div>",
     unsafe_allow_html=True,
 )
 
-# 個人化提示:把 Section 08 與 sidebar 的可選上傳口接起來,使用者不必另外去找
-st.info(
-    "💡 推送內容會自動帶上你在 **Section 08「進階個人健康檔案」** 填的資料"
-    "(年齡 / BMI / ICD-10 已診斷疾病 / 病歷重點 / 上傳病歷)— 沒填也 OK,會用一般建議。\n\n"
-    "**可選上傳**(都是選填):\n"
-    "- 🩺 個人病歷 → [↓ 跳到 Section 08 進階個人健康檔案](#perso)\n"
-    "- 📚 相關文獻 → 左側 sidebar「RAG 知識庫」上傳區(PDF / TXT / MD,享 RAG 檢索)"
+# ── 匯出狀態(讀 latest_aqi.json)────────────────────────────────────────────
+from pathlib import Path as _Path
+_export_path = _Path(__file__).resolve().parent / "hermes_export" / "latest_aqi.json"
+if _export_path.exists():
+    try:
+        _exp = json.loads(_export_path.read_text(encoding="utf-8"))
+        _exp_when = datetime.fromtimestamp(_export_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        _exp_cities = len(_exp.get("cities", []))
+        _exp_mode = _exp.get("data_mode", "?")
+        _exp_persona = "有(會個人化)" if _exp.get("user_profile") else "無(封面步驟①未填)"
+        st.success(
+            f"✓ 最後匯出:**{_exp_when}** · {_exp_cities} 城市 · 資料模式 `{_exp_mode}` · 個人檔案:{_exp_persona}"
+        )
+        st.caption(f"檔案路徑:`{_export_path}`")
+        with st.expander("👁 預覽 Agent Bot 會回的內容(讀同一份 JSON)", expanded=False):
+            _nat = _exp.get("national", {}) or {}
+            _worst = _nat.get("worst") or {}
+            _best = _nat.get("best") or {}
+            _preview = [
+                f"🇹🇼 全國平均 AQI {_nat.get('avg_aqi', '—')}（資料:{_exp_mode}）",
+                f"🔴 最高:{_worst.get('city', '—')} {_worst.get('aqi', '—')}（{_worst.get('level', '')}）",
+                f"🟢 最低:{_best.get('city', '—')} {_best.get('aqi', '—')}（{_best.get('level', '')}）",
+            ]
+            if _exp.get("user_city_advice"):
+                _preview.append(f"📍 {_exp.get('user_city_name', '')} 給你的建議:{_exp['user_city_advice']}")
+            st.code("\n".join(str(x) for x in _preview), language=None)
+    except Exception as e:
+        st.warning(f"讀取匯出檔失敗:{type(e).__name__}: {e}")
+else:
+    st.info("尚未匯出。先在封面填個人檔案(或 🎬 載入範例)→ 啟動 Pipeline,跑完就會產生 latest_aqi.json。")
+
+# ── 怎麼把 Agent Bot 接上聊天平台 ──────────────────────────────────────────
+st.markdown("<div class='eyebrow' style='margin-top:1rem;'>把 Agent Bot 接上聊天平台</div>", unsafe_allow_html=True)
+st.markdown(
+    "1. 準備一個會讀 JSON 的 agent 框架(本機已有 **Hermes** CLI 可當範例;OpenClaw 等亦可)。\n"
+    "2. 把本專案的 `hermes_skills/aqi-live/` skill 裝給它(讓它會讀 `latest_aqi.json`)。\n"
+    "3. 在聊天平台(Discord / LINE / Slack…)開一個 Bot、邀請進伺服器,綁到該 agent。\n"
+    "4. 之後在聊天室打 `@bot 台中現在空氣如何`,bot 就會讀最新匯出 + 你的 persona 回答。\n\n"
+    "詳細步驟見 `hermes_skills/aqi-live/SKILL.md`(以 Hermes 為範例)與 README『進階整合』段。"
 )
-
-with st.form("subscription_form"):
-    # ── 推送模式選擇(每日 Digest vs 即時預警) ──
-    # 「每日 Digest」= 每天固定時間(預設早 7 點)推一份完整摘要,包含 AQI 預測、
-    #                   個人健康建議、最佳出門時段。不論 AQI 高低都推。
-    # 「即時預警」= 只在 AQI > 閾值時推送單條警示。
-    sub_mode = st.radio(
-        "📨 推送模式",
-        options=["digest", "alert"],
-        format_func=lambda m: {
-            "digest": "📅 每日 Digest(完整摘要 · 每日固定時段)",
-            "alert":  "⚠ 即時預警(AQI 超過閾值才推)",
-        }[m],
-        index=0,  # 預設每日 Digest
-        horizontal=True,
-        key="sub_mode_radio",
-        help="Digest 適合一般使用者掌握全日節奏;Alert 適合敏感族群只在惡劣時被通知",
-    )
-
-    sub_c1, sub_c2 = st.columns(2)
-    with sub_c1:
-        sub_city = st.selectbox(
-            "📍 你的城市",
-            options=[c["id"] for c in CITIES],
-            format_func=lambda cid: CITY_BY_ID[cid]["name"],
-            index=next((i for i, c in enumerate(CITIES) if c["id"] == st.session_state.get("user_city", "taipei")), 0),
-            key="sub_city_select",
-        )
-        # 「敏感族群多選」改版後拿掉:過去要使用者勾「老人/幼童/氣喘/心血管/孕婦」
-        # 五選一,但這份分類太籠統(「孕婦」對沒懷孕的人多餘、「氣喘」對沒氣喘的
-        # 人沒用)。改成「個人化建議來自 Section 08 進階個人健康檔案」,送出時
-        # inline _personal_profile_block() 進 cron message,不依賴 MEMORY.md。
-        # Alert 模式才需要閾值;Digest 模式 slider 顯示但用於「文字提醒」(超過時加 ⚠ emoji)
-        sub_threshold = st.slider(
-            "⚠ AQI 警示閾值",
-            50, 200, 100, step=10,
-            key="sub_threshold_slider",
-            help="Alert 模式:超過此值才推。Digest 模式:超過此值時推文加上 ⚠ 強調"
-        )
-    with sub_c2:
-        sub_channel = st.selectbox(
-            "📡 推送頻道",
-            options=["discord", "telegram", "slack", "matrix", "(不推送,只在主畫面看)"],
-            key="sub_channel_select",
-        )
-        sub_target = st.text_input(
-            "頻道 ID / 對話 ID",
-            placeholder="例如 channel:123456789012345678 (Discord) 或 telegram chat id",
-            help="Discord: 從頻道右鍵 → 複製 ID (要先開啟開發者模式)",
-            key="sub_target_input",
-        )
-        # 不同模式給不同頻率預設選項
-        if sub_mode == "digest":
-            _cron_options = [
-                ("每天早上 7 點(推薦)", "0 7 * * *"),
-                ("每天早上 8 點", "0 8 * * *"),
-                ("每天早上 7 點 + 晚上 6 點", "0 7,18 * * *"),
-                ("每週一 / 三 / 五早上 7 點", "0 7 * * 1,3,5"),
-            ]
-        else:
-            _cron_options = [
-                ("每小時整點", "0 * * * *"),
-                ("每 30 分鐘", "*/30 * * * *"),
-                ("每 2 小時", "0 */2 * * *"),
-                ("每天早上 8 點 + 晚上 6 點", "0 8,18 * * *"),
-            ]
-        sub_cron_spec = st.selectbox(
-            "推送頻率",
-            options=_cron_options,
-            format_func=lambda x: x[0],
-            key="sub_cron_select",
-        )
-
-    sub_submit = st.form_submit_button("產生指令", type="primary", use_container_width=True)
-
-
-if sub_submit:
-    if sub_channel == "(不推送,只在主畫面看)":
-        st.info("✓ 已記住你的設定,回主畫面時可在「個人化推薦」section 看到對你的建議。")
-        st.session_state.user_city = sub_city
-        # 清除之前產生的指令
-        st.session_state.pop("_sub_cmd", None)
-        st.session_state.pop("_sub_cmd_str", None)
-    elif not sub_target.strip():
-        st.error("請填入頻道 ID")
-        st.session_state.pop("_sub_cmd", None)
-        st.session_state.pop("_sub_cmd_str", None)
-    else:
-        sub_city_name = CITY_BY_ID[sub_city]["name"]
-
-        # ── 個人健康檔案 inline 進 cron payload ──────────────────────
-        # OpenClaw `--session isolated` 不會載入 MEMORY.md,所以個人化資料
-        # 必須直接寫進 --message 字串。沒填(_personal_profile_block 回空字串)
-        # → 送出的 cron message 不帶個人段落,analyst 會給「一般族群」建議。
-        _profile_inline = _personal_profile_block()
-        _profile_section = (_profile_inline + "\n") if _profile_inline else ""
-        _persona_phrase = (
-            "請依上方使用者個人健康檔案(年齡 / BMI / 已診斷疾病 / 病歷重點)給針對性建議"
-            if _profile_inline else
-            "使用者未提供個人健康檔案,請給一般族群通用建議"
-        )
-
-        # 依模式組裝不同 LLM prompt — Digest 內容豐富、Alert 簡短
-        if sub_mode == "digest":
-            sub_msg = (
-                _profile_section
-                + f"請拉取台灣即時 AQI + 未來 6 小時 CAMS 預測,產出**{sub_city_name}的每日 Digest** 摘要,"
-                f"用繁體中文 4 段:\n"
-                f"① 🌅 今日空品速覽:{sub_city_name} 當下 AQI + 主要污染物 + 與昨日對比\n"
-                f"② 🕐 6h 預測:今天空品何時最差、何時最佳(以小時為單位)\n"
-                f"③ 🏥 健康建議:{_persona_phrase},依今日數值給具體行動清單(口罩 / 戶外時段 / 活動限制)\n"
-                f"④ ⚠ 注意事項:若任何時段 AQI > {sub_threshold},強調該時段需特別防護\n"
-                f"必須引用實際抓到的數值,不可編造其他城市。"
-            )
-            _name_suffix = f"digest-{sub_city}"
-        else:
-            sub_msg = (
-                _profile_section
-                + f"請拉取台灣即時 AQI 並用 2 段繁體中文摘要:① {sub_city_name}(我的城市)目前 AQI、PM2.5 等指標;"
-                f"② {_persona_phrase}。"
-                f"若 {sub_city_name} AQI 低於 {sub_threshold},明確說「目前空品良好,無需特別動作」一句帶過。"
-                f"必須引用實際抓到的數值。"
-            )
-            _name_suffix = f"alert-{sub_city}-{sub_threshold}"
-
-        _sub_cron_cmd = [
-            "openclaw", "cron", "add",
-            "--name", f"LobsterAQI-{_name_suffix}",
-            "--cron", sub_cron_spec[1],
-            "--tz", "Asia/Taipei",
-            "--session", "isolated",
-            "--agent", "analyst",
-            "--message", sub_msg,
-            "--announce",
-            "--channel", sub_channel,
-            "--to", sub_target.strip(),
-        ]
-        st.session_state["_sub_cmd"] = _sub_cron_cmd
-        st.session_state["_sub_cmd_str"] = " ".join(shlex.quote(p) for p in _sub_cron_cmd)
-
-# ── 指令顯示與按鈕區塊:脫離 form submit 狀態,永遠讀 session_state ────────────
-if st.session_state.get("_sub_cmd_str"):
-    st.markdown("<div class='eyebrow' style='margin-top:1rem;'>產生的指令</div>", unsafe_allow_html=True)
-    st.code(st.session_state["_sub_cmd_str"], language="bash")
-
-    sub_cA, sub_cB = st.columns(2)
-    with sub_cA:
-        if st.button("📋 我自己複製到 terminal 跑", use_container_width=True, key="sub_copy_btn"):
-            st.info("好，請手動跑上方那行指令。完成後 `openclaw cron list` 應看得到。")
-    with sub_cB:
-        if st.button("⚡ 直接幫我註冊（subprocess）", use_container_width=True, key="sub_register_btn"):
-            _cmd = st.session_state.get("_sub_cmd", [])
-            if _cmd:
-                try:
-                    sub_cmd_final = subprocess.list2cmdline(_cmd)
-                    sub_result = subprocess.run(
-                        sub_cmd_final,
-                        shell=True, capture_output=True, text=True, timeout=30,
-                        encoding="utf-8", errors="replace",
-                    )
-                    if sub_result.returncode == 0:
-                        st.success("✓ Cron job 已註冊。")
-                    else:
-                        st.error(f"失敗 (rc={sub_result.returncode})")
-                        st.code((sub_result.stdout or "(empty)") + "\n---\n" + (sub_result.stderr or "(empty)"))
-                except Exception as e:
-                    st.error(f"執行錯誤：{type(e).__name__}: {e}")
+st.caption(
+    "本機快速驗證(不用聊天平台):在專案目錄跑 "
+    "`python hermes_skills/aqi-live/read_export.py 台中市`,就能看到 bot 會貼的內容。"
+)
 
 
 # Footer

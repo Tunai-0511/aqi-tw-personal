@@ -8,7 +8,7 @@ LobsterAQI 兩件事是分開的：
 |------|------|--------|
 | **直接 LLM API**（Anthropic / Gemini / MiniMax / OpenAI / 自訂） | Pipeline 中分析師 + 預警員的 LLM 呼叫 + 右下角 AI 助理 + 城市比較頁 AI 比較 | ⭐ 必填一個 |
 | **EPA Open Data Token**（環境部資料開放平臺） | 拉取 20 縣市即時 AQI | ⭐ 必填 |
-| **OpenClaw**（自架 lobster gateway） | 排程推送 Discord/LINE、個人記憶、進階 RAG | 選填（沒裝也可全功能跑） |
+| **Agent Bot**（讀 JSON 匯出 · Hermes / OpenClaw… 皆可） | 在聊天平台(Discord / LINE…)回答空品(含個人化) | 選填（沒裝也可全功能跑） |
 
 ---
 
@@ -40,13 +40,41 @@ LobsterAQI 兩件事是分開的：
 - 貼進 sidebar 的「EPA Token」欄
 - 按「🔌 測試 EPA Token」確認 → 綠燈「✓ Token 有效 · 取得 N 測站」
 
-### Step 3：啟動 Pipeline
+### Step 3：（選填）填個人健康檔案 → 啟動 Pipeline
 
-封面點「▶ 啟動三代理人 Pipeline」→ smooth scroll 到劇場區 → 3 個 agent 依序亮起跑分析（~10-30 秒）→ 主儀表板出來。
+封面「**步驟 ① 個人健康檔案**」可先填年齡 / 已診斷疾病 / 我的 AQI 閾值 / 病歷(或按 **🎬 載入我的檔案**),
+再點「▶ 啟動三代理人 Pipeline」→ smooth scroll 到劇場區 → 3 個 agent 依序亮起跑分析（~10-30 秒）→ 主儀表板出來。
+**先填再跑**,分析師 / 預警員第一次就會據你的檔案個人化(不必重跑)。
 
-### Step 4（選填）：Discord 推送
+### Step 4（選填）：Agent Bot
 
-Sidebar 「Discord 推送」貼一條 channel webhook URL（頻道設定 → 整合 → Webhook → 複製 URL），按「🧪 測試 Discord」確認可用。之後 Pipeline 跑完會自動 POST 全國 AQI 摘要 + 最高/最低城市到該頻道。
+跑完 Pipeline 會自動把結果匯出成 `hermes_export/latest_aqi.json`。把任一 agent bot(Hermes / OpenClaw… 皆可)
+接上聊天平台讀它,使用者就能在 Discord / LINE 等 `@bot` 問空品(含個人化)。詳見下方「🔌 進階整合」段。
+
+---
+
+## 🎬 期末 demo 快速設置
+
+要在課堂 demo「個人化推薦以後」(SECTION 08-10)時一打開就有豐富內容,不必現場等 API / 逐日打卡:
+
+```powershell
+# 1) 灌入 demo 假資料(過去 16 天 AQI 歷史 + 台北 14 天污染事件軌跡 + 14 天健康日誌)
+雙擊 scripts\seed_demo_data.bat
+#   或:  python scripts\seed_demo_data.py
+#   清除:python scripts\seed_demo_data.py --clear
+#   換城市:python scripts\seed_demo_data.py --city kaohsiung
+
+# 2) 跑 run.bat 啟動 App
+# 3) 封面「步驟 ① 個人健康檔案」按「🎬 載入 demo 範例」(72 歲 COPD persona)
+# 4) 點「▶ 啟動三代理人 Pipeline」→ 分析師第一次跑就吃得到 persona(不必重跑)
+```
+
+灌進去的資料**全部標記為 demo 並放在隔離的 `source='demo'`**(日誌 note 含 `[demo]`),
+所以**demo 中途重跑 Pipeline 也不會被覆蓋**;App 偵測到 demo 資料就自動讀它,`--clear`
+後自動回讀真實資料。完整逐段講稿見 [`docs/demo_guide.md`](docs/demo_guide.md)。
+
+> ⚠ demo 資料是為了展示而合成的(本專案正常運作時一律用真實外部 API)。請只在 demo 情境用,
+> 並在簡報時誠實說明這幾天的歷史是 demo 資料。
 
 ---
 
@@ -62,7 +90,7 @@ Sidebar 「Discord 推送」貼一條 channel webhook URL（頻道設定 → 整
 | 氣象（溫濕度、風向、氣壓） | Open-Meteo | `api.open-meteo.com/v1/forecast` | ✗ 公開 |
 | LLM 分析 | Anthropic / MiniMax / DeepSeek / OpenAI / 自訂 | 各自的 `/chat/completions` 或 `/v1/messages` | ✓ 你的 LLM key |
 | 本機時序快取 | SQLite | `./lobster_aqi.sqlite` | ✗ 純本機 |
-| Pipeline 推送 | Discord Channel Webhook | `discord.com/api/webhooks/...` | ✓ 你的 webhook URL |
+| Hermes 拉取(取代推送) | 本機 JSON 匯出 | `hermes_export/latest_aqi.json` | ✗ 純本機 |
 
 ---
 
@@ -71,8 +99,8 @@ Sidebar 「Discord 推送」貼一條 channel webhook URL（頻道設定 → 整
 | 內部 ID | UI 顯示 | 用 LLM？ | 工作 | 資料源 |
 |---------|---------|--------|------|--------|
 | `collector` | **採集者** | ❌ 純 ETL | EPA 即時抓取 + Open-Meteo 氣象 + 民生公共物聯網 / LASS 並行清洗 | 環境部 EPA `aqx_p_432` + Open-Meteo + 民生公共物聯網 SensorThings + LASS-net Airbox |
-| `analyst`   | **分析師** | ✅ | 整合資料 + RAG 文獻檢索，產出 3 段風險分析（現況 / 敏感族群 / 未來 6h 研判）| 採集者輸出 + RAG（WHO 2021 / EPA NAAQS / Lancet 2023 / 台灣 AQI 標準）|
-| `advisor`   | **預警員** | ✅ | 接分析師的風險分級，產出 5 類敏感族群（老人 / 幼童 / 氣喘 / 心血管 / 孕婦）的具體建議 | 上方資料 |
+| `analyst`   | **分析師** | ✅ | 整合資料 + RAG 文獻檢索，產出 3 段風險分析（現況 / 健康建議 / 未來 6h 研判）| 採集者輸出 + RAG（WHO 2021 / EPA NAAQS / Lancet 2023 / 台灣 AQI 標準）|
+| `advisor`   | **預警員** | ✅ | 接分析師的風險分級，**依使用者個人健康檔案（年齡 / BMI / ICD-10 診斷 / 病歷）逐城市產出個人化建議**（不再分五大族群）| 上方資料 + 個人檔案 |
 
 **為何只剩 3 個？**
 
@@ -95,10 +123,10 @@ LobsterAQI 是 Streamlit 單頁應用 — 從封面捲到底,依序為 10 個 SE
 | 04 污染物剖析 | 熱力圖 + 雷達圖 + 堆疊組成 + PM2.5 vs AQI 散點 |
 | 05 環境關聯 | 濕度 vs PM2.5、風玫瑰 |
 | 06 官方 vs 民間 | EPA 測站對比 CivilIoT / LASS-net 微型感測器 |
-| 07 健康預警 | 每個城市一張預警卡,點敏感族群篩選建議 |
-| 08 個人化推薦 | 你的常駐城市 + 健康狀況 → 個人化健康指數卡 + 7 天趨勢 |
+| 07 健康預警 | 每個城市一張預警卡;有填個人檔案時展開為個人化建議 |
+| 08 個人化推薦 | 常駐城市 + 個人健康檔案 → 個人化健康指數(以你的 AQI 閾值算,不分族群)+ 7 天趨勢 |
 | 09 健康日誌 | 每日打卡(症狀分數 + 戶外時數)+ 症狀 vs AQI 相關性散點 |
-| 10 個人訂閱 | 表單產生 OpenClaw cron 指令,推播到 Discord(支援每日 Digest 模式)|
+| 10 Agent Bot | Pipeline 匯出 latest_aqi.json 供 Agent Bot(聊天平台)拉取 + 匯出狀態 |
 
 主儀表板上方有**時間軸 scrubber** — 拖動可看過去 24h 任一時點的快照。主畫面點「🔍 查看 [city] 詳細」會開啟**城市深入 modal**(無頁面切換,捲動位置保留),內容由 `_city_detail.py` 共用。
 
@@ -106,111 +134,59 @@ LobsterAQI 是 Streamlit 單頁應用 — 從封面捲到底,依序為 10 個 SE
 
 ---
 
-## 🔌 進階：OpenClaw 整合（選填）
+## 🔌 進階整合：Agent Bot（拉取 JSON 匯出 · 不綁特定產品）（選填）
 
-LobsterAQI 主功能不需要 OpenClaw，但加上後可以：
-- 排程每小時推播 AQI 摘要到 Discord
-- 把分析師綁到 Discord 頻道（@分析師 直接問空品）
-- 持久化使用者個人健康記憶（agent 跨 session 記得你）
-- 真實 RAG 文獻檢索（取代寫死的 snippets）
+LobsterAQI 主功能不需要任何外部 agent —— 跑 Pipeline、看 SECTION 02-10 都不必。
+但你可以把 **任一 agent bot（Hermes / OpenClaw… 皆可）接上聊天平台**,讓使用者直接問空品。
 
-### A. 安裝 OpenClaw（Windows + WSL2 推薦）
+### 怎麼運作（拉取模型,不是推送)
+
+1. **Pipeline 跑完 → 匯出 JSON**:每次跑完 Pipeline,LobsterAQI 會把這次結果(全台 20 城市快照 + 分析師摘要 + 預警員各城市建議 + 你在**封面步驟①**填的個人健康檔案)寫成 `hermes_export/latest_aqi.json`。
+2. **Agent Bot 來這裡讀**:你自架的 agent bot 裝上本專案的 `hermes_skills/aqi-live/` skill(以 Hermes 為範例實作),讀那份 JSON。
+3. **在聊天平台回答**:使用者打 `@bot 台中現在空氣如何`,bot 回最新數據 + 依 persona 的個人化提醒。換成別的 bot 框架,只要會讀這份 JSON 即可。
+
+> 沒有 webhook、沒有 cron 指令。資料是「你問、bot 才來讀」(pull),不是 LobsterAQI 主動推。
+> 匯出狀態(最後匯出時間 / 城市數 / 是否含個人檔案)可在主畫面 **SECTION · 10** 看到。
+
+### 本機快速驗證（不用 Discord）
 
 ```powershell
-# 1. PowerShell（管理員）
-wsl --install -d Ubuntu
-# 重開機
+# 先在 App 跑一次 Pipeline 產生 hermes_export\latest_aqi.json,然後:
+python hermes_skills\aqi-live\read_export.py            # 全國概況
+python hermes_skills\aqi-live\read_export.py 台北市      # 指定城市 + persona 提醒
 ```
 
-```bash
-# 2. Ubuntu 內
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
-sudo npm install -g openclaw
-openclaw onboard --install-daemon
-```
+印出的文字就是 Hermes 會貼進 Discord 的內容。匯出檔路徑可用環境變數 `LOBSTER_EXPORT` 覆寫。
 
-完整指南：[OpenClaw Getting Started](https://docs.openclaw.ai/start/getting-started)
+### 把 Hermes 設成 Discord bot
 
-### B. 註冊 3 個 agents（與 LobsterAQI 期待的 ID 一致）
+1. 安裝並啟動 Hermes(本機已有 `hermes` CLI)。
+2. 把 `hermes_skills/aqi-live/` 裝給 Hermes、`hermes_agents/aqi-reporter/` 作為 bot 人設。
+3. Discord Developer Portal 開 Bot → 邀請進伺服器 → 綁到 Hermes。
+4. 在 Discord `@bot` 問空品即可。詳見 [`hermes_skills/aqi-live/SKILL.md`](hermes_skills/aqi-live/SKILL.md)。
 
-從專案根目錄：
-```bash
-for id in collector analyst advisor; do
-  openclaw agents add "$id" --workspace "./openclaw_agents/$id" \
-    --model minimax/MiniMax-M2.7 --non-interactive --json
-done
-```
+> JSON 契約欄位見 `hermes_skills/aqi-live/SKILL.md`;產生邏輯在 [`data.py`](data.py) 的
+> `build_hermes_payload()`,寫檔在 [`app.py`](app.py) 的 `_write_hermes_export()`。
 
-每個 agent 的 `openclaw_agents/<id>/SOUL.md` + `IDENTITY.md` 已預先客製。
-（早期 5-agent 設計的 `scraper/` 與 `critic/` 兩個工作區已於 2026-05-13 移除,
-3-agent 重構後不再使用。）
+### （Legacy）OpenClaw 進階用法
 
-### C. 排程推送 Discord（每小時 AQI 摘要）
+> 早期版本曾用 OpenClaw 自架 gateway 做「排程推送 cron」+「跨會話 MEMORY」。現已改成上面的
+> Hermes 拉取模型 —— **不再產生 cron 指令、不再用 webhook 推送、SECTION 08 也沒有記憶體同步鈕**。
+> 以下兩項 OpenClaw 用法與主流程無關,仍可獨立使用,保留供參考:
 
-```bash
-scripts\setup_cron.bat       # 互動式輸入 Discord 頻道 ID
-```
-
-或手動：
-```bash
-openclaw cron add --name "TW-AQI-hourly" --cron "0 * * * *" --tz "Asia/Taipei" ^
-  --session isolated --agent analyst ^
-  --message "請拉取台灣即時 AQI 並用 3 段繁體中文摘要..." ^
-  --announce --channel discord --to "channel:<YOUR_CHANNEL_ID>"
-```
-
-查看 / 修改 / 刪除：
-```bash
-openclaw cron list
-openclaw cron edit TW-AQI-hourly
-openclaw cron remove TW-AQI-hourly
-openclaw cron run TW-AQI-hourly       # 立即跑一次測試
-```
-
-### D. Discord / LINE 雙向助理（在 Discord @ 分析師問空品）
-
-**Discord 5 步驟**：
-1. 在 [Discord Developer Portal](https://discord.com/developers/applications) 開 Bot，記下 token
-2. `openclaw configure` → Discord → 貼 token
-3. 把 Bot 邀請到你的 Discord server
-4. `openclaw pairing approve discord <code>`
-5. `openclaw agents bind --agent analyst --bind discord:<channel-id>`
-
-**LINE**：OpenClaw 2026.x 對 LINE 支援還在實驗階段，文件不全，可能需要等版本更新。
-
-### E. 個人健康記憶
-
-主畫面「個人化推薦」section 填好城市/狀況後，按「💾 同步至 OpenClaw 記憶體」。會寫進：
-- `~/.openclaw/agents/analyst/agent/MEMORY.md`
-- `~/.openclaw/agents/advisor/agent/MEMORY.md`
-
-下次經由 Discord / LINE 對話時，agent 會自動帶上你的背景。
-
-### F. 個人閾值訂閱
-
-主畫面捲到底部 SECTION · 10「個人訂閱」→ 填表單 → 自動產生 `openclaw cron add` 指令。例：「我住高雄、氣喘、AQI > 80 時推到 Discord」→ 每小時自動跑 → 條件成立才送。支援兩種推送模式:
-
-- **📅 每日 Digest** — 每天固定時段推完整摘要(空品速覽 + 預測 + 族群建議 + 警示時段)
-- **⚠ 即時預警** — 只在 AQI 突破閾值時推單條警示
-
-### G. 正式 RAG 知識庫
-
-預設的 RAG 引用是寫死的 4 條 snippets。要換成真實檢索：
-
-```bash
-# 1. 下載 WHO 2021 PDF + EPA NAAQS + 台灣 AQI 標準 + Lancet 2023
-scripts\build_knowledge.bat
-
-# 2. 安裝到 OpenClaw skill
-robocopy openclaw_skills\aqi-knowledge ^
-  %USERPROFILE%\.openclaw\workspace\skills\aqi-knowledge /E
-
-# 3. 重建索引
-openclaw memory reindex --skill aqi-knowledge
-```
-
-詳細文獻清單與授權見 [`docs/knowledge_sources.md`](docs/knowledge_sources.md)。
+- **在 gateway 裡跑 3 個 agent**:`openclaw_agents/{collector,analyst,advisor}/` 已預先客製 SOUL.md / IDENTITY.md:
+  ```bash
+  for id in collector analyst advisor; do
+    openclaw agents add "$id" --workspace "./openclaw_agents/$id" --model minimax/MiniMax-M2.7 --non-interactive --json
+  done
+  ```
+- **正式 RAG 知識庫**(取代寫死的 4 條 snippets):
+  ```powershell
+  scripts\build_knowledge.bat       # 下載 WHO 2021 / EPA NAAQS / 台灣 AQI / Lancet 2023
+  robocopy openclaw_skills\aqi-knowledge %USERPROFILE%\.openclaw\workspace\skills\aqi-knowledge /E
+  openclaw memory reindex --skill aqi-knowledge
+  ```
+  詳細文獻清單與授權見 [`docs/knowledge_sources.md`](docs/knowledge_sources.md)。
 
 ---
 
@@ -226,7 +202,7 @@ openclaw memory reindex --skill aqi-knowledge
 │  LobsterAQI Streamlit                                         │
 │  - 封面 / 劇場 / 10 個 SECTION(02-10 主要儀表板區)             │
 │  - 群組聊天室 + 右下角 AI 助理 + 城市深入 modal                 │
-│  - 時間軸 scrubber + 健康日誌 + 個人訂閱表單                    │
+│  - 封面步驟① 個人健康檔案 + 時間軸 scrubber + 健康日誌          │
 └──┬───────────────────────────────────────────────────────────┘
    │
    ├──── HTTP ────► data.moenv.gov.tw           (環境部 EPA 即時 aqx_p_432 + 歷史 aqx_p_488)
@@ -236,16 +212,18 @@ openclaw memory reindex --skill aqi-knowledge
    ├──── HTTP ────► air-quality-api.open-meteo  (CAMS 大氣化學模式，免金鑰)
    ├──── HTTP ────► Anthropic / MiniMax / DeepSeek / OpenAI / 自訂
    │                 (sidebar 選的 LLM 提供商；in-app 即時回應)
-   ├──── HTTP ────► discord.com/api/webhooks/…  (選填；Pipeline 完成推播摘要)
    │
    ├──── SQLite ──► ./lobster_aqi.sqlite        (本機時序快取 + 健康日誌；跨重啟保留)
-   └──── shell ──► scripts/setup_cron.bat ──► openclaw cron
-                          (選填；用於排程推送、MEMORY 寫入。
-                           OpenClaw gateway 跑在 localhost:18789,
-                           處理排程、Discord/LINE 路由;in-app LLM 不走它)
+   └──── write ──► ./hermes_export/latest_aqi.json
+                          (Pipeline 跑完匯出;Agent Bot「來這裡讀」回答 —
+                           拉取模型,不是 LobsterAQI 主動推。詳見「進階整合」段)
+
+           ┌──────────────────────────────────────────────┐
+   讀取 ◄──┤ Agent Bot(聊天平台 · hermes_skills/aqi-live)  │──► 在聊天平台回答(含 persona)
+           └──────────────────────────────────────────────┘
 ```
 
-**為什麼這樣切？** OpenClaw gateway 第一次冷啟動要 30-60 秒（plugin 探測），不適合放在「使用者點按鈕等回應」這條路徑上。但它的 cron + channel 系統很強，適合放在「使用者不在 LobsterAQI 也能收到推播」這條路徑上。
+**為什麼是「拉取」不是「推送」？** 不必架 webhook、不必註冊 cron;使用者在 Discord 問了,Hermes 才來讀最新匯出回答。資料只在本機 JSON,Hermes 與 LobsterAQI 解耦 —— 換成別的 bot 框架也只要會讀這份 JSON 即可。
 
 ---
 
@@ -259,7 +237,8 @@ openclaw memory reindex --skill aqi-knowledge
 | EPA「失敗：TOKEN 無效 / 速率限制」 | 用 sidebar 的「🔌 測試 EPA Token」看伺服器原始錯誤；常見：token 複製時漏字 |
 | EPA「JSON 解出但找不到 records · 結構：...」 | MOENV 又改 schema。請貼錯誤訊息給 dev 補 `_resolve_col` |
 | Pipeline 跑完 LLM 評論段是空的 | sidebar 沒填 LLM key；填了再啟動一次 |
-| 「OpenClaw cron list」啥都沒有 | 還沒跑 setup_cron.bat 或 openclaw onboard，那是進階功能 |
+| SECTION 10 顯示「尚未匯出」 | 還沒跑過 Pipeline;跑一次就會產生 `hermes_export/latest_aqi.json` |
+| `read_export.py` 找不到匯出檔 | 先在 App 跑一次 Pipeline,或設環境變數 `LOBSTER_EXPORT` 指到檔案 |
 | Port 8501 被佔 | 改 `.streamlit/config.toml` 的 `server.port` |
 
 ---
@@ -274,17 +253,24 @@ aqi-tw-personal-main/
 ├── charts.py               # Plotly 圖表工廠
 ├── styles.py               # 深色主題 CSS
 ├── _city_detail.py         # 城市深入 modal 共用渲染(底線前綴避免被 Streamlit pages 探索)
-├── openclaw_agents/        # 3 個 agent 的 SOUL.md / IDENTITY.md（給 OpenClaw 進階用）
+├── hermes_export/          # Pipeline 匯出的 latest_aqi.json(Agent Bot 拉取;Hermes 為範例)
+├── hermes_agents/          # Agent Bot 人設(Hermes 範例)
+│   └── aqi-reporter/       # IDENTITY / SOUL / TOOLS / USER.md
+├── hermes_skills/          # Hermes skill
+│   └── aqi-live/           # SKILL.md + read_export.py(讀 latest_aqi.json 格式化回覆)
+├── openclaw_agents/        # (legacy)在 gateway 裡跑 3 個 agent 的 SOUL.md / IDENTITY.md
 │   ├── advisor/            # 預警員
 │   ├── analyst/            # 分析師
 │   └── collector/          # 採集者
 ├── openclaw_skills/
-│   └── aqi-knowledge/      # SKILL.md +（跑 scripts/build_knowledge.bat 後填入 PDF）
+│   └── aqi-knowledge/      # (legacy)正式 RAG 知識庫 SKILL.md +(跑 build_knowledge.bat 後填 PDF)
 ├── scripts/
-│   ├── build_knowledge.bat # 下載 WHO/EPA/Lancet 文獻
-│   └── setup_cron.bat      # 註冊 OpenClaw 排程
+│   ├── build_knowledge.bat # (legacy)下載 WHO/EPA/Lancet 文獻
+│   ├── seed_demo_data.py   # 期末 demo 假資料灌庫(AQI 歷史 + 健康日誌)
+│   └── seed_demo_data.bat  # ↑ 的 Windows 雙擊版(自動 activate venv)
 ├── docs/
-│   └── knowledge_sources.md
+│   ├── knowledge_sources.md
+│   └── demo_guide.md       # 期末 demo 逐段講稿(SECTION 08-10)
 ├── CHANGELOG.md            # 變更紀錄
 ├── .gitignore
 ├── .streamlit/config.toml
@@ -307,4 +293,4 @@ aqi-tw-personal-main/
 
 ## 🦞 為什麼叫 LobsterAQI
 
-致敬 [OpenClaw](https://github.com/openclaw/openclaw) 的 lobster 🦞 主題。即使現在的核心 LLM 路徑不走 OpenClaw，視覺主題與進階推送功能仍保留龍蝦概念。
+致敬 [OpenClaw](https://github.com/openclaw/openclaw) 的 lobster 🦞 主題。即使現在的對外整合已改成 **Agent Bot 拉取 JSON**(以 Hermes 為範例;不綁特定產品、不走推送 / cron),龍蝦視覺主題與品牌仍保留。
