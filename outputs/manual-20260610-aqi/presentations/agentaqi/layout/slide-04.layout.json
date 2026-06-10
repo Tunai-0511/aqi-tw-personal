@@ -1,0 +1,992 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/ec5yfa",
+    "id": "ec5yfa",
+    "slide": 4,
+    "layoutId": "fc3296d6-38fb-4fda-91c1-77facaf1a24e",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "f4bebf4a-1f00-4818-9203-66a5a6192f58",
+    "masterLayoutName": "Master",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Aptos",
+      "Aptos Display"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "fc3296d6-38fb-4fda-91c1-77facaf1a24e",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "f4bebf4a-1f00-4818-9203-66a5a6192f58",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "f4bebf4a-1f00-4818-9203-66a5a6192f58",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fa9w3m94",
+      "id": "1",
+      "bbox": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/8v6psfil",
+      "id": "2",
+      "bbox": [
+        0,
+        0,
+        16,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#008FC4",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xczed8v6",
+      "id": "3",
+      "bbox": [
+        16,
+        0,
+        5,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#E46F24",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/qd4vmtwr",
+      "id": "4",
+      "bbox": [
+        62,
+        32,
+        500,
+        28
+      ],
+      "geometry": "rect",
+      "text": "SOLUTION",
+      "textPreview": "SOLUTION",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 14,
+        "typeface": "Aptos",
+        "color": "#008FC4",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "SOLUTION"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "SOLUTION",
+          "resolvedTextStyle": {
+            "fontSize": 14,
+            "typeface": "Aptos",
+            "color": "#008FC4",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "SOLUTION",
+              "fontSize": 14,
+              "typeface": "Aptos",
+              "color": "#008FC4",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fyxobm58",
+      "id": "5",
+      "bbox": [
+        1100,
+        704,
+        118,
+        12
+      ],
+      "geometry": "rect",
+      "text": "AgentAQI",
+      "textPreview": "AgentAQI",
+      "resolvedFontSize": 8,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 8,
+        "typeface": "Aptos",
+        "color": "#708196",
+        "alignment": "right",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "AgentAQI"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "AgentAQI",
+          "resolvedTextStyle": {
+            "fontSize": 8,
+            "typeface": "Aptos",
+            "color": "#708196",
+            "alignment": "right"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "AgentAQI",
+              "fontSize": 8,
+              "typeface": "Aptos",
+              "color": "#708196"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/8jqh0fep",
+      "id": "6",
+      "bbox": [
+        60,
+        68,
+        950,
+        86
+      ],
+      "geometry": "rect",
+      "text": "解法概覽：三個 agent 各司其職",
+      "textPreview": "解法概覽：三個 agent 各司其職",
+      "resolvedFontSize": 35,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 35,
+        "typeface": "Aptos Display",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "解法概覽：三個 agent 各司其職"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "解法概覽：三個 agent 各司其職",
+          "resolvedTextStyle": {
+            "fontSize": 35,
+            "typeface": "Aptos Display",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "解法概覽：三個 agent 各司其職",
+              "fontSize": 35,
+              "typeface": "Aptos Display",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/x4nap4r6",
+      "id": "7",
+      "bbox": [
+        62,
+        154,
+        980,
+        34
+      ],
+      "geometry": "rect",
+      "text": "讓資料處理、風險判讀、健康建議保持清楚邊界，降低 LLM 幻覺與維護成本。",
+      "textPreview": "讓資料處理、風險判讀、健康建議保持清楚邊界，降低 LLM 幻覺與維護成本。",
+      "resolvedFontSize": 16,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 16,
+        "typeface": "Aptos",
+        "color": "#40546D",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "讓資料處理、風險判讀、健康建議保持清楚邊界，降低 LLM 幻覺與維護成本。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "讓資料處理、風險判讀、健康建議保持清楚邊界，降低 LLM 幻覺與維護成本。",
+          "resolvedTextStyle": {
+            "fontSize": 16,
+            "typeface": "Aptos",
+            "color": "#40546D",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "讓資料處理、風險判讀、健康建議保持清楚邊界，降低 LLM 幻覺與維護成本。",
+              "fontSize": 16,
+              "typeface": "Aptos",
+              "color": "#40546D"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/q1orytsv",
+      "id": "8",
+      "bbox": [
+        85,
+        205,
+        320,
+        275
+      ],
+      "geometry": "rect",
+      "fillColor": "#F4F8FB",
+      "lineColor": "#D6E2EE",
+      "lineWidth": 1
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fmlkjm1c",
+      "id": "9",
+      "bbox": [
+        85,
+        205,
+        7,
+        275
+      ],
+      "geometry": "rect",
+      "fillColor": "#008FC4",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/jqh0fepk",
+      "id": "10",
+      "bbox": [
+        107,
+        223,
+        282,
+        28
+      ],
+      "geometry": "rect",
+      "text": "A｜採集者 Collector",
+      "textPreview": "A｜採集者 Collector",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Aptos",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "A｜採集者 Collector"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "A｜採集者 Collector",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "typeface": "Aptos",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "A｜採集者 Collector",
+              "fontSize": 20,
+              "typeface": "Aptos",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/q5o7qpg3",
+      "id": "11",
+      "bbox": [
+        107,
+        261,
+        282,
+        203
+      ],
+      "geometry": "rect",
+      "text": "負責 ETL：抓 EPA 即時/歷史、Open-Meteo 氣象、CAMS 空品、Civil IoT / LASS PM2.5，並做清洗、欄位解析、fallback。",
+      "textPreview": "負責 ETL：抓 EPA 即時/歷史、Open-Meteo 氣象、CAMS 空品、Civil IoT / LASS PM2.5，並做清洗、欄位解析、fallback。",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 15,
+        "typeface": "Aptos",
+        "color": "#40546D",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 3,
+        "lines": [
+          {
+            "index": 1,
+            "text": "負責 ETL：抓 EPA 即時/歷史、Open-Meteo"
+          },
+          {
+            "index": 2,
+            "text": "氣象、CAMS 空品、Civil IoT / LASS"
+          },
+          {
+            "index": 3,
+            "text": "PM2.5，並做清洗、欄位解析、fallback。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "負責 ETL：抓 EPA 即時/歷史、Open-Meteo 氣象、CAMS 空品、Civil IoT / LASS PM2.5，並做清洗、欄位解析、fallback。",
+          "resolvedTextStyle": {
+            "fontSize": 15,
+            "typeface": "Aptos",
+            "color": "#40546D",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "負責 ETL：抓 EPA 即時/歷史、Open-Meteo 氣象、CAMS 空品、Civil IoT / LASS PM2.5，並做清洗、欄位解析、fallback。",
+              "fontSize": 15,
+              "typeface": "Aptos",
+              "color": "#40546D"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/1w7mp0bi",
+      "id": "12",
+      "bbox": [
+        480,
+        205,
+        320,
+        275
+      ],
+      "geometry": "rect",
+      "fillColor": "#F4F8FB",
+      "lineColor": "#D6E2EE",
+      "lineWidth": 1
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/8bat47y1",
+      "id": "13",
+      "bbox": [
+        480,
+        205,
+        7,
+        275
+      ],
+      "geometry": "rect",
+      "fillColor": "#E46F24",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/j2t83itg",
+      "id": "14",
+      "bbox": [
+        502,
+        223,
+        282,
+        28
+      ],
+      "geometry": "rect",
+      "text": "B｜分析員 Analyst",
+      "textPreview": "B｜分析員 Analyst",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Aptos",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "B｜分析員 Analyst"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "B｜分析員 Analyst",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "typeface": "Aptos",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "B｜分析員 Analyst",
+              "fontSize": 20,
+              "typeface": "Aptos",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/qh0fepkz",
+      "id": "15",
+      "bbox": [
+        502,
+        261,
+        282,
+        203
+      ],
+      "geometry": "rect",
+      "text": "把 AQI 趨勢、污染物組成、環境因子與 RAG 參考資料轉成摘要。LLM 負責解釋，不碰原始資料可信度。",
+      "textPreview": "把 AQI 趨勢、污染物組成、環境因子與 RAG 參考資料轉成摘要。LLM 負責解釋，不碰原始資料可信度。",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 15,
+        "typeface": "Aptos",
+        "color": "#40546D",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 3,
+        "lines": [
+          {
+            "index": 1,
+            "text": "把 AQI 趨勢、污染物組成、環境因子與"
+          },
+          {
+            "index": 2,
+            "text": "RAG 參考資料轉成摘要。LLM"
+          },
+          {
+            "index": 3,
+            "text": "負責解釋，不碰原始資料可信度。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "把 AQI 趨勢、污染物組成、環境因子與 RAG 參考資料轉成摘要。LLM 負責解釋，不碰原始資料可信度。",
+          "resolvedTextStyle": {
+            "fontSize": 15,
+            "typeface": "Aptos",
+            "color": "#40546D",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "把 AQI 趨勢、污染物組成、環境因子與 RAG 參考資料轉成摘要。LLM 負責解釋，不碰原始資料可信度。",
+              "fontSize": 15,
+              "typeface": "Aptos",
+              "color": "#40546D"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/18jqh0fe",
+      "id": "16",
+      "bbox": [
+        875,
+        205,
+        320,
+        275
+      ],
+      "geometry": "rect",
+      "fillColor": "#F4F8FB",
+      "lineColor": "#D6E2EE",
+      "lineWidth": 1
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/8nqxs72x",
+      "id": "17",
+      "bbox": [
+        875,
+        205,
+        7,
+        275
+      ],
+      "geometry": "rect",
+      "fillColor": "#00A85A",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/j6tovaho",
+      "id": "18",
+      "bbox": [
+        897,
+        223,
+        282,
+        28
+      ],
+      "geometry": "rect",
+      "text": "C｜預警員 Advisor",
+      "textPreview": "C｜預警員 Advisor",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Aptos",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "C｜預警員 Advisor"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "C｜預警員 Advisor",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "typeface": "Aptos",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "C｜預警員 Advisor",
+              "fontSize": 20,
+              "typeface": "Aptos",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ulwval87",
+      "id": "19",
+      "bbox": [
+        897,
+        261,
+        282,
+        203
+      ],
+      "geometry": "rect",
+      "text": "讀取個人健康檔案與 AQI 閾值，生成針對城市、疾病、年齡與外出情境的防護建議。",
+      "textPreview": "讀取個人健康檔案與 AQI 閾值，生成針對城市、疾病、年齡與外出情境的防護建議。",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 15,
+        "typeface": "Aptos",
+        "color": "#40546D",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 3,
+        "lines": [
+          {
+            "index": 1,
+            "text": "讀取個人健康檔案與 AQI"
+          },
+          {
+            "index": 2,
+            "text": "閾值，生成針對城市、疾病、年齡與外出"
+          },
+          {
+            "index": 3,
+            "text": "情境的防護建議。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "讀取個人健康檔案與 AQI 閾值，生成針對城市、疾病、年齡與外出情境的防護建議。",
+          "resolvedTextStyle": {
+            "fontSize": 15,
+            "typeface": "Aptos",
+            "color": "#40546D",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "讀取個人健康檔案與 AQI 閾值，生成針對城市、疾病、年齡與外出情境的防護建議。",
+              "fontSize": 15,
+              "typeface": "Aptos",
+              "color": "#40546D"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ed8v6psf",
+      "id": "20",
+      "bbox": [
+        130,
+        548,
+        1020,
+        72
+      ],
+      "geometry": "rect",
+      "fillColor": "#EEF6FB",
+      "lineColor": "#008FC4",
+      "lineWidth": 1
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/7y1kre1w",
+      "id": "21",
+      "bbox": [
+        160,
+        568,
+        960,
+        36
+      ],
+      "geometry": "rect",
+      "text": "輸出：Streamlit 10 個 section + SQLite 時序快取 + hermes_export/latest_aqi.json",
+      "textPreview": "輸出：Streamlit 10 個 section + SQLite 時序快取 + hermes_export/latest_aqi.json",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 24,
+        "typeface": "Aptos",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "center",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "輸出：Streamlit 10 個 section + SQLite 時序快取 + hermes_export/latest_aqi.json"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "輸出：Streamlit 10 個 section + SQLite 時序快取 + hermes_export/latest_aqi.json",
+          "resolvedTextStyle": {
+            "fontSize": 24,
+            "typeface": "Aptos",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "輸出：Streamlit 10 個 section + SQLite 時序快取 + hermes_export/latest_aqi.json",
+              "fontSize": 24,
+              "typeface": "Aptos",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

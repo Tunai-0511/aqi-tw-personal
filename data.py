@@ -45,11 +45,10 @@ except ImportError:
 
 import json
 import math
-import random
 import time
 import requests
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -429,7 +428,7 @@ AGENTS = [
     {"id": "B", "name": "分析師", "role": "風險分析",   "color": "#9b59ff",
      "desc": "加權公式 + RAG 文獻檢索 + LLM 風險報告"},
     {"id": "C", "name": "預警員", "role": "健康預警",   "color": "#00e676",
-     "desc": "風險等級 → 5 類敏感族群建議"},
+     "desc": "依個人健康檔案 → 所選城市詳細個人化建議"},
 ]
 
 

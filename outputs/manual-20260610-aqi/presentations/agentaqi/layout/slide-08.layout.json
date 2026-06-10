@@ -1,0 +1,1004 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/xmfojh",
+    "id": "xmfojh",
+    "slide": 8,
+    "layoutId": "fc3296d6-38fb-4fda-91c1-77facaf1a24e",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "f4bebf4a-1f00-4818-9203-66a5a6192f58",
+    "masterLayoutName": "Master",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Aptos",
+      "Aptos Display"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "fc3296d6-38fb-4fda-91c1-77facaf1a24e",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "f4bebf4a-1f00-4818-9203-66a5a6192f58",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "f4bebf4a-1f00-4818-9203-66a5a6192f58",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/032lszqt",
+      "id": "1",
+      "bbox": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#FFFFFF",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/bi9s36hc",
+      "id": "2",
+      "bbox": [
+        0,
+        0,
+        16,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#008FC4",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ixczed8v",
+      "id": "3",
+      "bbox": [
+        16,
+        0,
+        5,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#E46F24",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/p0bi9s36",
+      "id": "4",
+      "bbox": [
+        62,
+        32,
+        500,
+        28
+      ],
+      "geometry": "rect",
+      "text": "SCENARIOS",
+      "textPreview": "SCENARIOS",
+      "resolvedFontSize": 14,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 14,
+        "typeface": "Aptos",
+        "color": "#008FC4",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "SCENARIOS"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "SCENARIOS",
+          "resolvedTextStyle": {
+            "fontSize": 14,
+            "typeface": "Aptos",
+            "color": "#008FC4",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "SCENARIOS",
+              "fontSize": 14,
+              "typeface": "Aptos",
+              "color": "#008FC4",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/0fepkzup",
+      "id": "5",
+      "bbox": [
+        1100,
+        704,
+        118,
+        12
+      ],
+      "geometry": "rect",
+      "text": "AgentAQI",
+      "textPreview": "AgentAQI",
+      "resolvedFontSize": 8,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 8,
+        "typeface": "Aptos",
+        "color": "#708196",
+        "alignment": "right",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "AgentAQI"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "AgentAQI",
+          "resolvedTextStyle": {
+            "fontSize": 8,
+            "typeface": "Aptos",
+            "color": "#708196",
+            "alignment": "right"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "AgentAQI",
+              "fontSize": 8,
+              "typeface": "Aptos",
+              "color": "#708196"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/bulwval8",
+      "id": "6",
+      "bbox": [
+        60,
+        68,
+        950,
+        86
+      ],
+      "geometry": "rect",
+      "text": "使用情境：不同人看到同一份空品，得到不同決策",
+      "textPreview": "使用情境：不同人看到同一份空品，得到不同決策",
+      "resolvedFontSize": 35,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 35,
+        "typeface": "Aptos Display",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "使用情境：不同人看到同一份空品，得到不同決策"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "使用情境：不同人看到同一份空品，得到不同決策",
+          "resolvedTextStyle": {
+            "fontSize": 35,
+            "typeface": "Aptos Display",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "使用情境：不同人看到同一份空品，得到不同決策",
+              "fontSize": 35,
+              "typeface": "Aptos Display",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/i9s36hcr",
+      "id": "7",
+      "bbox": [
+        62,
+        154,
+        980,
+        34
+      ],
+      "geometry": "rect",
+      "text": "AgentAQI 的價值在於把空品數據翻譯成個人可執行的建議。",
+      "textPreview": "AgentAQI 的價值在於把空品數據翻譯成個人可執行的建議。",
+      "resolvedFontSize": 16,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 16,
+        "typeface": "Aptos",
+        "color": "#40546D",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "AgentAQI 的價值在於把空品數據翻譯成個人可執行的建議。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "AgentAQI 的價值在於把空品數據翻譯成個人可執行的建議。",
+          "resolvedTextStyle": {
+            "fontSize": 16,
+            "typeface": "Aptos",
+            "color": "#40546D",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "AgentAQI 的價值在於把空品數據翻譯成個人可執行的建議。",
+              "fontSize": 16,
+              "typeface": "Aptos",
+              "color": "#40546D"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/t47y1kre",
+      "id": "8",
+      "bbox": [
+        70,
+        200,
+        340,
+        310
+      ],
+      "geometry": "rect",
+      "fillColor": "#F4F8FB",
+      "lineColor": "#D6E2EE",
+      "lineWidth": 1
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/0je9cvix",
+      "id": "9",
+      "bbox": [
+        70,
+        200,
+        7,
+        310
+      ],
+      "geometry": "rect",
+      "fillColor": "#D9384A",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/a5gbq1or",
+      "id": "10",
+      "bbox": [
+        92,
+        218,
+        302,
+        28
+      ],
+      "geometry": "rect",
+      "text": "情境 1｜COPD 長者",
+      "textPreview": "情境 1｜COPD 長者",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Aptos",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "情境 1｜COPD 長者"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "情境 1｜COPD 長者",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "typeface": "Aptos",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "情境 1｜COPD 長者",
+              "fontSize": 20,
+              "typeface": "Aptos",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3m94fu18",
+      "id": "11",
+      "bbox": [
+        92,
+        256,
+        302,
+        238
+      ],
+      "geometry": "rect",
+      "text": "72 歲、COPD、個人 AQI 閾值 50。當城市 AQI 逼近普通上緣，系統會比公定 AQI>100 更早提醒：減少外出、配戴 N95/KF94、避開尖峰時段。",
+      "textPreview": "72 歲、COPD、個人 AQI 閾值 50。當城市 AQI 逼近普通上緣，系統會比公定 AQI>100 更早提醒：減少外出、配戴 N95/KF94、避開尖峰時段。",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 15,
+        "typeface": "Aptos",
+        "color": "#40546D",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "72 歲、COPD、個人 AQI 閾值 50。當城市 AQI"
+          },
+          {
+            "index": 2,
+            "text": "逼近普通上緣，系統會比公定 AQI>100"
+          },
+          {
+            "index": 3,
+            "text": "更早提醒：減少外出、配戴"
+          },
+          {
+            "index": 4,
+            "text": "N95/KF94、避開尖峰時段。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "72 歲、COPD、個人 AQI 閾值 50。當城市 AQI 逼近普通上緣，系統會比公定 AQI>100 更早提醒：減少外出、配戴 N95/KF94、避開尖峰時段。",
+          "resolvedTextStyle": {
+            "fontSize": 15,
+            "typeface": "Aptos",
+            "color": "#40546D",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "72 歲、COPD、個人 AQI 閾值 50。當城市 AQI 逼近普通上緣，系統會比公定 AQI>100 更早提醒：減少外出、配戴 N95/KF94、避開尖峰時段。",
+              "fontSize": 15,
+              "typeface": "Aptos",
+              "color": "#40546D"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/s72x4nap",
+      "id": "12",
+      "bbox": [
+        470,
+        200,
+        340,
+        310
+      ],
+      "geometry": "rect",
+      "fillColor": "#F4F8FB",
+      "lineColor": "#D6E2EE",
+      "lineWidth": 1
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/lszqtcj6",
+      "id": "13",
+      "bbox": [
+        470,
+        200,
+        7,
+        310
+      ],
+      "geometry": "rect",
+      "fillColor": "#E46F24",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 14,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/adsji5sn",
+      "id": "14",
+      "bbox": [
+        492,
+        218,
+        302,
+        28
+      ],
+      "geometry": "rect",
+      "text": "情境 2｜過敏學生",
+      "textPreview": "情境 2｜過敏學生",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Aptos",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "情境 2｜過敏學生"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "情境 2｜過敏學生",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "typeface": "Aptos",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "情境 2｜過敏學生",
+              "fontSize": 20,
+              "typeface": "Aptos",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 15,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/3ylc7u54",
+      "id": "15",
+      "bbox": [
+        492,
+        256,
+        302,
+        238
+      ],
+      "geometry": "rect",
+      "text": "有過敏性鼻炎，準備通勤或運動。系統依城市趨勢、PM2.5 與氣象條件，給出是否延後戶外活動、是否戴口罩的建議。",
+      "textPreview": "有過敏性鼻炎，準備通勤或運動。系統依城市趨勢、PM2.5 與氣象條件，給出是否延後戶外活動、是否戴口罩的建議。",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 15,
+        "typeface": "Aptos",
+        "color": "#40546D",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "有過敏性鼻炎，準備通勤或運動。系統依城市"
+          },
+          {
+            "index": 2,
+            "text": "趨勢、PM2.5"
+          },
+          {
+            "index": 3,
+            "text": "與氣象條件，給出是否延後戶外活動、是否戴"
+          },
+          {
+            "index": 4,
+            "text": "口罩的建議。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "有過敏性鼻炎，準備通勤或運動。系統依城市趨勢、PM2.5 與氣象條件，給出是否延後戶外活動、是否戴口罩的建議。",
+          "resolvedTextStyle": {
+            "fontSize": 15,
+            "typeface": "Aptos",
+            "color": "#40546D",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "有過敏性鼻炎，準備通勤或運動。系統依城市趨勢、PM2.5 與氣象條件，給出是否延後戶外活動、是否戴口罩的建議。",
+              "fontSize": 15,
+              "typeface": "Aptos",
+              "color": "#40546D"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 16,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/sji5snel",
+      "id": "16",
+      "bbox": [
+        870,
+        200,
+        340,
+        310
+      ],
+      "geometry": "rect",
+      "fillColor": "#F4F8FB",
+      "lineColor": "#D6E2EE",
+      "lineWidth": 1
+    },
+    {
+      "order": 17,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/h4byhgn2",
+      "id": "17",
+      "bbox": [
+        870,
+        200,
+        7,
+        310
+      ],
+      "geometry": "rect",
+      "fillColor": "#7A42D6",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 18,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ap4r65wj",
+      "id": "18",
+      "bbox": [
+        892,
+        218,
+        302,
+        28
+      ],
+      "geometry": "rect",
+      "text": "情境 3｜聊天平台查詢",
+      "textPreview": "情境 3｜聊天平台查詢",
+      "resolvedFontSize": 20,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 20,
+        "typeface": "Aptos",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "情境 3｜聊天平台查詢"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "情境 3｜聊天平台查詢",
+          "resolvedTextStyle": {
+            "fontSize": 20,
+            "typeface": "Aptos",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "情境 3｜聊天平台查詢",
+              "fontSize": 20,
+              "typeface": "Aptos",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 19,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/za1gvy90",
+      "id": "19",
+      "bbox": [
+        892,
+        256,
+        302,
+        238
+      ],
+      "geometry": "rect",
+      "text": "使用者在 Discord 問 bot 今天空品。bot 不重新打 API，而是讀 AgentAQI 匯出的 JSON，回覆全國平均、最高/最低城市與個人化提醒。",
+      "textPreview": "使用者在 Discord 問 bot 今天空品。bot 不重新打 API，而是讀 AgentAQI 匯出的 JSON，回覆全國平均、最高/最低城市與個人化提醒。",
+      "resolvedFontSize": 15,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 15,
+        "typeface": "Aptos",
+        "color": "#40546D",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 4,
+        "lines": [
+          {
+            "index": 1,
+            "text": "使用者在 Discord 問 bot 今天空品。bot"
+          },
+          {
+            "index": 2,
+            "text": "不重新打 API，而是讀 AgentAQI 匯出的"
+          },
+          {
+            "index": 3,
+            "text": "JSON，回覆全國平均、最高/最低城市與個人"
+          },
+          {
+            "index": 4,
+            "text": "化提醒。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "使用者在 Discord 問 bot 今天空品。bot 不重新打 API，而是讀 AgentAQI 匯出的 JSON，回覆全國平均、最高/最低城市與個人化提醒。",
+          "resolvedTextStyle": {
+            "fontSize": 15,
+            "typeface": "Aptos",
+            "color": "#40546D",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "使用者在 Discord 問 bot 今天空品。bot 不重新打 API，而是讀 AgentAQI 匯出的 JSON，回覆全國平均、最高/最低城市與個人化提醒。",
+              "fontSize": 15,
+              "typeface": "Aptos",
+              "color": "#40546D"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 20,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/ra5gbq1o",
+      "id": "20",
+      "bbox": [
+        180,
+        570,
+        920,
+        54
+      ],
+      "geometry": "rect",
+      "fillColor": "#EEF6FB",
+      "lineColor": "#008FC4",
+      "lineWidth": 1
+    },
+    {
+      "order": 21,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/2p8nqxs7",
+      "id": "21",
+      "bbox": [
+        210,
+        586,
+        860,
+        26
+      ],
+      "geometry": "rect",
+      "text": "同一個 AQI 數字，最後落地成三種行動：看圖、做防護、讓 bot 主動轉述。",
+      "textPreview": "同一個 AQI 數字，最後落地成三種行動：看圖、做防護、讓 bot 主動轉述。",
+      "resolvedFontSize": 21,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 21,
+        "typeface": "Aptos",
+        "color": "#102033",
+        "bold": true,
+        "alignment": "center",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "同一個 AQI 數字，最後落地成三種行動：看圖、做防護、讓 bot 主動轉述。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "同一個 AQI 數字，最後落地成三種行動：看圖、做防護、讓 bot 主動轉述。",
+          "resolvedTextStyle": {
+            "fontSize": 21,
+            "typeface": "Aptos",
+            "color": "#102033",
+            "bold": true,
+            "alignment": "center"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "同一個 AQI 數字，最後落地成三種行動：看圖、做防護、讓 bot 主動轉述。",
+              "fontSize": 21,
+              "typeface": "Aptos",
+              "color": "#102033",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

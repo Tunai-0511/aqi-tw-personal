@@ -252,8 +252,7 @@ button[kind="primary"] {
    Why: type="password" triggers Chrome's "save password?" popup + later autofill.
    We use type="default" (so Chrome ignores it) + CSS to visually mask the chars. */
 .st-key-masked_llm_key input,
-.st-key-masked_epa_key input,
-.st-key-masked_discord_url input {
+.st-key-masked_epa_key input {
   -webkit-text-security: disc !important;
   -moz-text-security: disc !important;
   text-security: disc !important;

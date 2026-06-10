@@ -45,8 +45,6 @@ def _persona_line(prof: dict | None) -> str:
         bits.append(f"{prof['age']} 歲")
     if prof.get("diagnoses"):
         bits.append("、".join(prof["diagnoses"]))
-    elif prof.get("conditions"):
-        bits.append("、".join(prof["conditions"]))
     if prof.get("bmi"):
         bits.append(f"BMI {prof['bmi']}")
     who = "、".join(bits) if bits else "你"
@@ -74,6 +72,12 @@ def format_reply(data: dict, city_query: str | None = None) -> str:
         lines.append(
             f"   PM2.5 {match['pm25']} · PM10 {match['pm10']} · O3 {match['o3']} · NO2 {match['no2']}"
         )
+        # 個人化閾值對照:使用者有 persona 且該城市 AQI 超過「他自設的閾值」→ 明確標警
+        # (這正是「個人化」的意義 — 不是等公定 100,而是用使用者自己的標準)
+        prof = data.get("user_profile")
+        thr = (prof or {}).get("threshold") or data.get("threshold")
+        if prof and thr and float(match["aqi"]) > float(thr):
+            lines.append(f"⚠ 已超過你設定的個人預警閾值（{int(thr)}）— 建議減少戶外、加強防護。")
         adv = (data.get("advisories") or {}).get(match["city"])
         if adv:
             lines.append(f"🏥 {adv}")

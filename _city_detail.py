@@ -15,7 +15,8 @@
 """
 from __future__ import annotations  # 啟用延後求值的型別註解(允許未來的型別語法)
 
-import pandas as pd
+from datetime import timedelta
+
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -26,6 +27,18 @@ from data import (
     aqi_to_level,
     parse_agent_c_per_city,
 )
+
+
+def _hero_data_time(row) -> str:
+    """該城市快照的絕對資料時間(≈ EPA 發布時刻)= 抓取時間 − 抓取時落後分鐘。
+
+    與主畫面 app.py 的 _data_time_str 同一套邏輯:絕對時間永遠為真,
+    不像「X 分鐘前」會隨頁面閒置變成謊言。
+    """
+    _lr = st.session_state.get("last_pipeline_run_at")
+    if _lr is None:
+        return "—"
+    return (_lr - timedelta(minutes=int(row.get("updated_min_ago", 0)))).strftime("%H:%M")
 # 從 charts 模組匯入:make_aqi_gauge = AQI 圓形儀表板圖;PALETTE = 統一配色盤
 from charts import (
     make_aqi_gauge, PALETTE,
@@ -113,7 +126,7 @@ def render_city_detail(
               <div style='font-size:1.05rem; color:#c0c8d8; margin-top:0.3rem;'>
                 AQI <b style='color:{row["color"]};'>{row['aqi']:.0f}</b> ·
                 <span style='color:{row["color"]};'>{row['level']}</span> ·
-                更新於 {row['updated_min_ago']} 分鐘前
+                資料時間 {_hero_data_time(row)}
               </div>
             </div>
             <div style='display:flex; gap:0.7rem; flex-wrap:wrap;'>
@@ -215,9 +228,8 @@ def render_city_detail(
 
     # ── Row 2:已移除 ────────────────────────────────────────────────────────
     # 原本是「未來 6 小時 AQI 預測 + 最佳外出時段」,於 2026-05-13 第三輪
-    # 修復時刪除。原因:使用者已有訂閱推送功能可獲取未來資訊,且
-    # `best_outdoor_hours()` 內部使用 `np.random` 合成資料,推薦時段並非
-    # 真實預測,容易誤導使用者出門決策。
+    # 修復時刪除。原因:`best_outdoor_hours()` 內部使用 `np.random` 合成資料,
+    # 推薦時段並非真實預測,容易誤導使用者出門決策。
 
     # ── Row 3:預警員(LLM)給的個人化健康建議 ───────────────────────────────
     st.markdown("<div class='eyebrow' style='margin-top:1rem;'>🤖 預警員給此城市的建議</div>", unsafe_allow_html=True)
@@ -242,7 +254,7 @@ def render_city_detail(
         st.markdown(
             f"<div class='glass-card'>"
             f"<div style='color:#c0c8d8;'>{lvl['advice']}</div>"
-            f"<div class='tiny muted' style='margin-top:0.5rem;'>📚 提示：在主畫面執行 Pipeline 並填個人健康檔案，預警員會給針對前三高 AQI 城市的個人化建議。</div>"
+            f"<div class='tiny muted' style='margin-top:0.5rem;'>📚 提示：個人化詳細建議在主畫面 SECTION 07（針對你選的城市，可一鍵換城市重生）；此處為 AQI 等級通用建議。</div>"
             f"</div>",
             unsafe_allow_html=True,
         )

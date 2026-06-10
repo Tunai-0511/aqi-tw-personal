@@ -9,12 +9,12 @@
 頁面架構(由上至下):
   - **頂部封面 (Cover)** :品牌標題 + 「啟動 Pipeline」按鈕 + 模式狀態指示
   - **SECTION · 01 三隻 agent 協作視覺化**:像素風辦公室 + agent 群組聊天室
-  - **SECTION · 02 即時 AQI 主儀表板**:時間軸 + 聚焦城市 + 排名 + 地圖 + 散點 + 新鮮度
-  - **SECTION · 03 24 小時趨勢**:多城市 AQI 趨勢線
-  - **SECTION · 04 污染物剖析**:熱力圖 + 雷達圖 + 堆疊組成 + 散點
-  - **SECTION · 05 環境關聯**:濕度 vs PM2.5、風玫瑰
+  - **SECTION · 02 即時 AQI 主儀表板**:時間軸 + 聚焦城市(預設=你的城市)+ 排名 + 地圖 + 散點 + 資料時間
+  - **SECTION · 03 24 小時趨勢**:AQI 趨勢線 + 24h×20 城熱力圖 + 7 天紀錄板
+  - **SECTION · 04 污染物剖析**:雷達圖 + 堆疊組成
+  - **SECTION · 05 環境關聯**:濕度 vs AQI、風玫瑰
   - **SECTION · 06 官方 vs 民間**:EPA 測站對比 CivilIoT / LASS-net 微型感測器
-  - **SECTION · 07 健康預警**:每個城市一張預警卡,有填個人健康檔案時展開為個人建議
+  - **SECTION · 07 健康預警**:預警員為「所選城市」生成詳細個人化建議(可一鍵換城市重生);縣市卡雙層門檻 — 你的城市依你設的閾值、其他縣市依公定 AQI>100,全部未達標顯示 all-clear
   - **SECTION · 08 個人化推薦**:依使用者城市 / 個人健康檔案給個人化健康指數(不再分五大族群)
   - **SECTION · 09 健康日誌**:每日打卡 + 症狀 vs AQI 相關性散點
   - **SECTION · 10 Agent Bot**:Pipeline 匯出 latest_aqi.json 供 Agent Bot(聊天平台)拉取 + 匯出狀態
@@ -41,7 +41,6 @@
 from __future__ import annotations
 
 import json
-import random
 import re
 import time
 from datetime import datetime, timedelta
@@ -125,8 +124,8 @@ def init_state():
         "comm_log":        [],               # 3-agent 群組聊天室的訊息歷史
 
         # ── 自動更新設定 ──
-        # 啟用時,每小時整點 fragment 會檢查是否需要重跑 Pipeline。
-        # 預設 True — 使用者離開電腦一小時回來看到的會是新鮮資料而非舊的。
+        # 啟用時,fragment 每 10 分鐘檢查;跨入新時鐘小時且過整點緩衝即自動重跑
+        # (對齊 EPA 整點發布)。預設 True — 頁面開著一小時後看到的是新鮮資料。
         "auto_refresh_enabled": True,
         "last_pipeline_run_at": None,       # 上次完成 Pipeline 的時間(datetime)
 
@@ -155,7 +154,8 @@ def init_state():
 
         # ── LLM 輸出快取 ──
         "llm_analysis":    "",               # 分析師(B)的風險分析報告
-        "agent_c_advisories": "",            # 預警員(C)的個人化建議:`<<<CITY:NAME>>>...<<<CITY:...>>>` sentinel 串。空字串 = 使用者沒填個人檔案,UI 改用 CTA banner + 通用 AQI 等級建議。
+        "agent_c_advisories": "",            # 預警員(C)的詳細個人化建議:單一城市,程式包成 `<<<CITY:NAME>>>...` sentinel(下游 parse/export 相容)。空字串 = 沒填個人檔案或 LLM 失敗。
+        "agent_c_city_id":   None,           # 上面那份建議是針對哪個城市(SECTION 07 顯示 + 判斷要不要提供「換城市重生」)
 
         # ── RAG 知識庫 ──
         # 預先植入 WHO/EPA/Lancet/MOENV 4 份權威文獻;使用者上傳 PDF 會 append。
@@ -165,14 +165,14 @@ def init_state():
 
         # ── 聊天 / UI 狀態 ──
         "chat_history":    [],               # AI 助理對話歷史 list[{"role": "user"/"assistant", "content": "...", ...}]
-        "trend_cities":    ["taipei", "taichung", "kaohsiung", "hualien", "kinmen"],   # 趨勢圖預設城市
+        "trend_cities":    ["taipei"],       # 趨勢圖預設城市(錨定後=只放你的城市,可再多選比較)
         "radar_cities":    ["taipei", "yunlin", "kaohsiung", "kinmen"],                # 雷達圖預設城市
         # selected_groups 已移除:過去 Section 07 有「敏感族群篩選」按鈕用這個 list,
         # 2026-05-21 改成依個人健康檔案產出每城市個人建議,篩選按鈕一併拿掉。
         "user_city":       "taipei",         # 個人化推薦的「我的城市」
         # 個人 AQI 預警閾值(P1 #1):主畫面會 highlight「你的城市 AQI > 這個門檻」
         "user_aqi_threshold": 100,           # 預設 100(對敏感族群不健康的界線)
-        # ── 進階個人健康檔案(RAG 個人化升級,SECTION · 08 expander)──
+        # ── 個人健康檔案(RAG 個人化升級;表單在封面「步驟①」)──
         # 注入 LLM prompt 供分析師 / 預警員 / AI 助理參考
         "user_age":         0,               # 0 = 未提供(刻意非 30:30 會讓 _personal_profile_block 誤判「已填」而永遠把年齡 30 注入 LLM)
         "user_sex":         "prefer_not",    # female / male / other / prefer_not
@@ -435,7 +435,7 @@ def _ingest_personal_medical_file(f) -> int:
       - 每個 chunk 的 source 前綴 "[個人病歷] "(視覺上明顯區分)
       - scope 改為 "personal" → retrieve_rag_chunks 會給 1.4× 加權
       - 在 st.session_state.user_med_files 寫入一筆 metadata,
-        供 SECTION · 08 UI 顯示「已上傳 X 份個人病歷」以及清除按鈕使用。
+        供封面「步驟①」UI 顯示「已上傳 X 份個人病歷」以及清除按鈕使用。
 
     Returns
     -------
@@ -526,11 +526,6 @@ def retrieve_rag_chunks(query: str, top_k: int = 5) -> list[dict]:
 # =============================================================================
 # 多代理人輔助函式 (Multi-agent Helpers)
 # =============================================================================
-def agent_color(agent_id: str) -> str:
-    """根據 agent id (A/B/C) 查回該 agent 的主題色(失敗預設青色)。"""
-    return next((a["color"] for a in AGENTS if a["id"] == agent_id), "#00d9ff")
-
-
 def agent_name(agent_id: str) -> str:
     """根據 agent id 查回中文名(失敗時直接回傳 id)。"""
     return next((a["name"] for a in AGENTS if a["id"] == agent_id), agent_id)
@@ -549,7 +544,7 @@ PARTICIPANTS: dict[str, dict[str, str]] = {
     "SYS":     {"name": "系統",         "label": "⚙",  "color": "#8b95a8"},
     "LLM":     {"name": "LLM",          "label": "🤖", "color": "#c4a5ff"},
     "DB":      {"name": "本機時序快取", "label": "💾", "color": "#4eecff"},
-    "WEBHOOK": {"name": "Discord",      "label": "📡", "color": "#ffb380"},
+    "EXPORT":  {"name": "JSON 匯出",    "label": "📦", "color": "#ffb380"},
     "USER":    {"name": "使用者",       "label": "👤", "color": "#e8eef7"},
     "*":       {"name": "全體 agent",   "label": "📢", "color": "#c0c8d8"},
 }
@@ -570,7 +565,7 @@ def push_log(agent_id: str, msg: str, to: str = "SYS"):
     Parameters
     ----------
     agent_id : str
-        發送者代號(A/B/C/SYS/LLM/DB/WEBHOOK/USER)
+        發送者代號(A/B/C/SYS/LLM/DB/EXPORT/USER)
     msg : str
         訊息內容(可含 emoji)
     to : str
@@ -844,6 +839,95 @@ def _write_hermes_export(snapshot_df):
     return out_path
 
 
+# ── 預警員(Agent C)的 prompt 工廠 + 單獨重生 ─────────────────────────────
+# 改版:預警員從「20 城市各 3-4 句」改成「只針對所選城市,一份分節的詳細建議」。
+# 理由:(a) 深度 — 單城市可以寫到 250-450 字、分 5 小節,而不是每城 3 句蜻蜓點水;
+#       (b) 成本 — LLM token 省 ~20 倍、生成時間大幅縮短;
+#       (c) 彈性 — 點「城市排行」換聚焦後,SECTION 07 可一鍵只為新城市重生。
+# 模型輸出純文字(不再要求 sentinel),程式自己包一層 <<<CITY:NAME>>> —— 下游的
+# parse_agent_c_per_city / Hermes 匯出 / 城市 modal 全部不用改。
+_ADVISOR_SYSTEM = (
+    "你是台灣空氣品質系統的健康預警員。重要:只能根據訊息中提供的具體數值與文獻作答,"
+    "禁止編造資料、城市或事件。回覆使用繁體中文。"
+)
+
+
+def _advisor_prompt_for_city(snapshot_df, city_id: str):
+    """組「單一城市 × 詳細個人化建議」的預警員 prompt。
+
+    Returns (prompt, city_row);使用者沒填個人檔案時回 (None, None)。
+    城市不在快照時 fallback 到當下最高 AQI 城市(理論上不會發生)。
+    """
+    prof = _personal_profile_block()
+    if not prof:
+        return None, None
+    match = snapshot_df[snapshot_df["city_id"] == city_id]
+    if match.empty:
+        match = snapshot_df.sort_values("aqi", ascending=False).head(1)
+    row = match.iloc[0]
+    rank = int((snapshot_df["aqi"] > row["aqi"]).sum()) + 1
+    avg_aqi = float(snapshot_df["aqi"].mean())
+    # 個人 RAG(scope=personal 享 1.4× boost):query 用診斷標籤 + 目標城市
+    try:
+        _seed_rag_chunks()
+        diag_labels = [
+            d["label"] for d in USER_ICD10_OPTIONS
+            if d["code"] in st.session_state.get("user_diagnoses", [])
+        ]
+        picked = retrieve_rag_chunks(
+            "個人健康建議 " + " ".join(diag_labels) + " " + str(row["city"]), top_k=5
+        )
+    except Exception:
+        picked = []
+    rag_block = ""
+    if picked:
+        rag_block = (
+            "\n=== RAG 檢索結果(可引用,標註來源)===\n"
+            + "\n".join(f"  [{c['source']}] {c['text']}" for c in picked)
+            + "\n"
+        )
+    prompt = (
+        prof + "\n"
+        f"你是空品健康預警員。只針對「{row['city']}」這一個城市,為上面這位使用者寫一份**詳細**的個人化健康建議。\n\n"
+        f"=== {row['city']} 即時數據 ===\n"
+        f"AQI {row['aqi']:.0f}({row['level']})· PM2.5 {row['PM2.5']} μg/m³ · PM10 {row['PM10']} · "
+        f"O3 {row['O3']} · NO2 {row['NO2']} · SO2 {row['SO2']} · CO {row['CO']}\n"
+        f"全國脈絡:全國平均 AQI {avg_aqi:.0f};{row['city']} 在 20 城市中第 {rank} 高。\n"
+        f"對照使用者自設閾值:目前 AQI {row['aqi']:.0f} "
+        f"{'已超過' if float(row['aqi']) > int(st.session_state.get('user_aqi_threshold', 100)) else '未超過'}"
+        f"使用者設定的 {int(st.session_state.get('user_aqi_threshold', 100))} — 建議必須回應這一點。\n"
+        + rag_block
+        + "\n=== 輸出格式(繁體中文,總長 250-450 字,依下列小節,不要其他前言)===\n"
+        "【現況風險】2-3 句:此刻對這位使用者的主要風險與原因,引用具體數值與其年齡/疾病\n"
+        "【外出建議】2-3 句:今天適不適合出門、建議的活動強度/時段/時長\n"
+        "【防護裝備】1-2 句:口罩等級、是否開空氣清淨機、其他防護\n"
+        "【症狀警訊】1-2 句:出現哪些症狀該中止活動或就醫(對應其病史)\n"
+        "【一句總結】20 字內的行動指令\n"
+        "規則:只引用上面提供的數值與文獻,不可編造;若 RAG 有個人病歷內容請帶到。"
+    )
+    return prompt, row
+
+
+def _regen_advisor_for_city(snapshot_df, city_id: str) -> str | None:
+    """SECTION 07「🔁 重新產生」:單獨呼叫一次預警員 LLM。成功回 None,失敗回原因字串。"""
+    prompt, row = _advisor_prompt_for_city(snapshot_df, city_id)
+    if prompt is None:
+        return "請先在封面「步驟①」填寫個人健康檔案"
+    if not st.session_state.get("llm_key"):
+        return "sidebar 尚未填 LLM 金鑰"
+    resp = call_llm_api(
+        st.session_state.llm_provider, st.session_state.llm_key, prompt,
+        st.session_state.llm_model, st.session_state.llm_base_url,
+        system=_ADVISOR_SYSTEM, max_tokens=3072, timeout=120,
+    )
+    if not resp:
+        import data as _data
+        return "LLM 失敗:" + (getattr(_data, "LAST_LLM_ERROR", "") or "未知原因")
+    st.session_state.agent_c_advisories = f"<<<CITY:{row['city']}>>>\n{resp.strip()}\n"
+    st.session_state.agent_c_city_id = str(row["city_id"])
+    return None
+
+
 def run_pipeline(
     office_ph=None,
     cleaning_ph=None,
@@ -864,15 +948,16 @@ def run_pipeline(
 
       B. **分析師** (Analyst) — 用 LLM 寫風險分析報告
          1. 從 RAG 檢索與 AQI 等級相關的文獻片段
-         2. 組合 prompt:「前 3 高 AQI + RAG context」
+         2. 組合 prompt:「全國均值 + 最高/最低城市 + RAG context」
          3. 呼叫 LLM (call_llm_api),把回應存到 `llm_analysis`
 
       C. **預警員** (Advisor) — 用 LLM 產出「個人化」健康建議
-         1. 先檢查使用者有沒有填 Section 08 進階個人健康檔案;沒填則完全跳過 LLM 呼叫
+         1. 先檢查使用者有沒有填封面「步驟①」個人健康檔案;沒填則完全跳過 LLM 呼叫
             (省 token,UI 改顯示 CTA banner)
-         2. 有填:從 personal-scope RAG 池檢索使用者上傳的病歷 + 全球 starter snippets
-         3. 用 `<<<CITY:NAME>>>` sentinel 格式為**每個城市**輸出 3-4 句個人建議,
-            存到 `agent_c_advisories`,UI 用 `parse_agent_c_per_city()` 拆 dict
+         2. 有填:只為「所選城市」生成一份 5 小節詳細建議(prompt 由
+            _advisor_prompt_for_city 統一組;注入 personal-scope RAG 病歷)
+         3. 輸出由程式包成 `<<<CITY:NAME>>>` sentinel 存到 `agent_c_advisories`,
+            UI / 匯出用 `parse_agent_c_per_city()` 拆 dict(單城市一筆)
 
       整批寫入 SQLite tsdb(時序快取),供「過去 7 天」紀錄板使用。
       最後把結果匯出成 hermes_export/latest_aqi.json,供 Hermes(Discord bot)拉取。
@@ -892,6 +977,7 @@ def run_pipeline(
     st.session_state.snapshot              = None
     st.session_state.llm_analysis          = ""
     st.session_state.agent_c_advisories    = ""
+    st.session_state.agent_c_city_id       = None
 
     # If the caller (the agent section) pre-allocated placeholders, route all
     # live updates there — that's how the chat log ends up inside the
@@ -942,14 +1028,14 @@ def run_pipeline(
         "禁止編造資料、城市或事件。回覆使用繁體中文，不限制長度——把該講的講完整。"
     )
 
-    def _agent_llm(prompt: str, max_tokens: int = 4096) -> tuple[str | None, str]:
+    def _agent_llm(prompt: str, max_tokens: int = 4096, system: str | None = None) -> tuple[str | None, str]:
         """Direct provider call. Returns (response_or_None, error_reason).
         error_reason is empty on success, otherwise a short diagnostic string."""
         if not has_llm:
             return None, "未填 LLM 金鑰"
         resp = call_llm_api(
             llm_provider, llm_key, prompt, llm_model, llm_base_url,
-            system=AGENT_SYSTEM, max_tokens=max_tokens, timeout=120,
+            system=system or AGENT_SYSTEM, max_tokens=max_tokens, timeout=120,
         )
         if resp:
             return resp, ""
@@ -1107,14 +1193,15 @@ def run_pipeline(
     progress.progress(0.75, text="分析師 · 完成")
 
     # ── 預警員 (C) ──────────────────────────────────────────────────────
-    # 改版重點(原本是「5 類敏感族群通用建議」,使用者反映過於籠統):
+    # 改版重點:
     #   ❶ 只在使用者「有填個人健康檔案 / 上傳病歷」時才呼叫 LLM。
     #      沒填 → 跳過 Agent C(省 token & API 配額),Section 07 改顯示
-    #      CTA banner 引導使用者去填 Section 08。
-    #   ❷ 有填 → 用 <<<CITY:NAME>>> sentinel 格式輸出「每個城市一段」的
-    #      個人化建議,parse_agent_c_per_city() 再拆成 dict 餵給 UI。
-    #   ❸ 額外注入 personal-scope RAG chunks(過去只有 chat panel 走動態 RAG),
-    #      讓 LLM 引用使用者上傳的病歷檔。
+    #      CTA banner 引導使用者去填。
+    #   ❷ 只為「所選城市」(沒點選 = 常駐城市)生成**一份詳細**建議
+    #      (分 5 小節、250-450 字),而非 20 城市各 3 句 — 更深入、token 省 ~20 倍。
+    #      prompt 由 _advisor_prompt_for_city() 統一組(SECTION 07 的「換城市重生」
+    #      按鈕也用同一個),輸出由程式包成 <<<CITY:NAME>>> sentinel,下游相容。
+    #   ❸ 注入 personal-scope RAG chunks,讓 LLM 引用使用者上傳的病歷檔。
     st.session_state.active_agent = "C"
     _status("C")
     push_log("B", "風險分析完成，把風險分級結果交給你發布預警", to="C")
@@ -1130,60 +1217,18 @@ def run_pipeline(
         push_log("C", "使用者未填個人健康檔案 — 略過個人化建議生成（UI 會顯示 CTA banner）", to="SYS")
         _refresh_log()
     elif has_llm:
-        push_log("C", f"偵測到個人健康檔案 → 請 {prov_name} 針對使用者生成各城市個人化建議", to="LLM")
+        # 目標城市 = 跑 Pipeline 當下的「所選城市」(沒點選 = 封面填的常駐城市)
+        _c_target = st.session_state.selected_city or st.session_state.get("user_city", "taipei")
+        c_prompt, _c_row = _advisor_prompt_for_city(snapshot, _c_target)
+        push_log("C", f"偵測到個人健康檔案 → 請 {prov_name} 為「{_c_row['city']}」生成詳細個人化建議", to="LLM")
         _refresh_log()
-        # 全部城市的 AQI 條列(不只 top 3 — 讓 UI 可以每張卡片都有個人建議可放)
-        all_city_list = "\n".join(
-            f"- {r['city']}：AQI {r['aqi']:.0f}（{r['level']}），PM2.5 {r['PM2.5']} μg/m³"
-            for _, r in snapshot.sort_values("aqi", ascending=False).iterrows()
-        )
-        # ── 注入個人 RAG chunks(scope=personal 享 1.4× boost)─────────
-        # query 用 ICD-10 標籤 + 最差 3 城市名,讓檢索能命中使用者自己上傳的
-        # 病歷文件 + 全球 starter snippets(WHO/EPA/Lancet)。
-        try:
-            _seed_rag_chunks()  # idempotent:確保 starter snippets 已 seed
-            user_diag_labels = [
-                d["label"] for d in USER_ICD10_OPTIONS
-                if d["code"] in st.session_state.get("user_diagnoses", [])
-            ]
-            _top3 = snapshot.sort_values("aqi", ascending=False).head(3)
-            _rag_query = (
-                "個人健康建議 " + " ".join(user_diag_labels)
-                + " " + " ".join(_top3["city"].tolist())
-            )
-            picked_chunks = retrieve_rag_chunks(_rag_query, top_k=5)
-        except Exception:
-            picked_chunks = []
-        rag_block = ""
-        if picked_chunks:
-            rag_block = (
-                "\n=== RAG 檢索結果（可引用,標註來源)===\n"
-                + "\n".join(f"  [{c['source']}] {c['text']}" for c in picked_chunks)
-                + "\n"
-            )
-
-        c_prompt = (
-            c_profile + "\n"
-            + f"你是預警員。下面是台灣 {len(snapshot)} 個城市的當下 AQI:\n{all_city_list}\n"
-            + rag_block
-            + "\n=== 任務 ===\n"
-            "請為**每個城市**輸出一段個人化健康建議,3-4 句,必須:\n"
-            "  1. 引用該城市的具體 AQI 與 PM2.5 數值\n"
-            "  2. 明確帶上使用者的年齡 / BMI / 已診斷疾病 / 病歷重點如何影響該城市的風險\n"
-            "  3. 給具體行動建議(口罩等級、戶外時段、藥物提醒、何時就醫)\n"
-            "  4. 若 RAG 檢索結果有相關文獻或使用者個人病歷,簡短引用\n\n"
-            "**輸出格式(嚴格遵守,UI 依此 parse,格式錯會 fallback 到通用建議)**:\n"
-            "<<<CITY:台北市>>>\n"
-            "(針對台北市的 3-4 句個人化建議)\n"
-            "<<<CITY:新北市>>>\n"
-            "(針對新北市的 3-4 句個人化建議)\n"
-            "...(每個城市都要有一段,共 " + str(len(snapshot)) + " 段)\n\n"
-            "每個 sentinel 之間只放該城市的建議文字,不要加額外 markdown heading 或前言。"
-        )
-        c_resp, c_err = _agent_llm(c_prompt, max_tokens=6144)
+        # 與 SECTION 07「🔁 重生」按鈕共用同一個 system prompt,確保兩條路徑語氣一致
+        c_resp, c_err = _agent_llm(c_prompt, max_tokens=3072, system=_ADVISOR_SYSTEM)
         if c_resp:
-            st.session_state.agent_c_advisories = c_resp
-            push_log("LLM", f"個人化建議生成完成（{len(c_resp)} 字 · {len(parse_agent_c_per_city(c_resp))} 城市）", to="C")
+            # 程式包 sentinel(模型輸出純文字)→ parse / 匯出 / modal 全部相容
+            st.session_state.agent_c_advisories = f"<<<CITY:{_c_row['city']}>>>\n{c_resp.strip()}\n"
+            st.session_state.agent_c_city_id = str(_c_row["city_id"])
+            push_log("LLM", f"「{_c_row['city']}」詳細個人化建議生成完成（{len(c_resp)} 字）", to="C")
         else:
             push_log("LLM", f"⚠ 失敗：{c_err}（UI 會顯示 fallback 提示）", to="C")
             st.session_state.agent_c_advisories = ""
@@ -1257,12 +1302,11 @@ def run_pipeline(
 # Streamlit 預設右側展開的設定面板,包含:
 #   - AgentAQI 品牌 logo
 #   - 資料來源狀態(EPA / Open-Meteo)
-#   - 自動更新 toggle(本輪新增功能)
+#   - 自動更新 toggle(整點對齊 EPA)
 #   - LLM 提供商選擇 + API key 輸入
 #   - EPA API token 輸入
-#   - Discord webhook URL 輸入
 #   - RAG 知識庫 PDF 上傳區
-#   - SQLite 時序快取狀態
+#   - SQLite 時序快取狀態 + Agent Bot 匯出說明
 # =============================================================================
 with st.sidebar:
     st.markdown(
@@ -1303,7 +1347,7 @@ with st.sidebar:
 
     st.markdown(" ")
 
-    # In-app LLM provider (Pipeline + 助理 + 比較頁都用這條路徑，毫秒級回應)
+    # In-app LLM provider (Pipeline + AI 助理都用這條路徑，毫秒級回應)
     st.markdown("<div class='eyebrow'>LLM 提供商</div>", unsafe_allow_html=True)
     prov_keys = list(LLM_PROVIDERS.keys())
     prov_idx  = prov_keys.index(st.session_state.llm_provider) if st.session_state.llm_provider in prov_keys else 0
@@ -1350,7 +1394,7 @@ with st.sidebar:
     # 不再用 webhook 推送 / cron 指令。設定與匯出狀態見 SECTION 10。
     st.markdown(
         "<div class='tiny muted' style='line-height:1.55; margin-top:0.6rem;'>"
-        "🤖 Agent Bot 讀 <code>latest_aqi.json</code> 在聊天平台回答空品 — 詳見 SECTION 10 與 README『進階整合』段。"
+        "🤖 Agent Bot 讀 <code>latest_aqi.json</code> 在聊天平台回答空品 — 詳見 SECTION 10 與 README『Agent Bot 整合』段。"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -1523,10 +1567,12 @@ with st.sidebar:
             "↻  重新執行 Pipeline",
             type="primary", use_container_width=True,
         )
-        st.markdown(
-            f"<div class='tiny muted'>上次執行：{datetime.now().strftime('%H:%M:%S')}</div>",
-            unsafe_allow_html=True,
-        )
+        _lr = st.session_state.get("last_pipeline_run_at")
+        if _lr:
+            st.markdown(
+                f"<div class='tiny muted'>上次執行：{_lr.strftime('%m/%d %H:%M')}</div>",
+                unsafe_allow_html=True,
+            )
 
     st.markdown(" ")
 
@@ -1602,7 +1648,7 @@ with st.sidebar:
     sections = [
         ("agents",  "🤖 代理人劇場"),
         ("dash",    "📊 主儀表板"),
-        ("trend",   "📈 趨勢與預測"),
+        ("trend",   "📈 24 小時趨勢"),
         ("pollute", "🧪 污染物剖析"),
         ("env",     "🌬 環境關聯"),
         ("source",  "📡 資料來源對比"),
@@ -1646,7 +1692,7 @@ ANTI_HALLUCINATION_SYSTEM = (
 
 
 # ─── 個人化健康檔案 helpers(RAG 個人化升級)──────────────────────────────
-# 兩個 helper 處理「進階個人健康檔案」(SECTION · 08 expander)的衍生資料:
+# 兩個 helper 處理「個人健康檔案」(封面步驟①)的衍生資料:
 #   - _calc_bmi:由身高體重計算 BMI 與中文分類(用於 UI 即時顯示 + 注入 LLM prompt)
 #   - _personal_profile_block:把全部個人欄位拼成 LLM prompt 注入段落
 # 若使用者沒填任何欄位(零回歸測試),_personal_profile_block 回空字串,
@@ -1720,11 +1766,16 @@ def _personal_profile_block() -> str:
         "prefer_not":  "未提供",
     }.get(st.session_state.get("user_sex", "prefer_not"), "未提供")
     age_txt = f"{age} 歲" if age else "未提供"
+    # 閾值放在「閘門之後」才注入:它有預設值 100(永遠非空),若參與上面的
+    # 三欄位閘門判斷,會讓「完全沒填」的使用者也被視為已填,破壞零回歸保證。
+    thr = int(st.session_state.get("user_aqi_threshold", 100))
     return (
         "=== 使用者個人健康檔案（請在回答中明確參考這些因素）===\n"
         f"年齡：{age_txt} / 性別：{sex_label} / BMI：{bmi:.1f}（{bmi_cat}）\n"
         f"已診斷疾病：{diag_text}\n"
         f"病歷重點：{hist or '（未填）'}\n"
+        f"自設 AQI 預警閾值：{thr}（使用者認為「超過就該注意」的個人標準，"
+        "給建議時請以此為門檻，而非公定 100）\n"
         "請在建議中明確提及這些因素如何影響此使用者的個人風險（例如年齡>65、有 COPD、BMI 過重等），"
         "不要僅給通用建議。\n"
     )
@@ -1761,6 +1812,20 @@ def _render_persona_step1() -> None:
                 key="user_city_select",
             )
             st.session_state.user_city = user_city
+
+            # ── 個人化錨點:儀表板各區的「預設城市」跟著你的城市走 ──────────
+            # 第一次進來、或你换了常駐城市 → 把趨勢圖 / 雷達圖的預設清單重新
+            # 錨定成「你的城市排第一」,並 pop 掉 keyed widget 的舊狀態讓新預設
+            # 生效。之後你在圖表裡自由增減城市,不會再被強制改回。
+            if st.session_state.get("_anchor_city") != user_city:
+                st.session_state["_anchor_city"] = user_city
+                # 趨勢圖預設「只放你的城市」一條線(乾淨聚焦;要比較再自己多選)
+                st.session_state.trend_cities = [user_city]
+                st.session_state.radar_cities = ([user_city] + [
+                    c for c in st.session_state.radar_cities if c != user_city
+                ])[:4]
+                st.session_state.pop("trend_select", None)
+                st.session_state.pop("radar_select", None)
 
             # 不再用「五大敏感族群」分桶 —— 改成你個人的 AQI 預警閾值(個人化)。
             # 健康狀況改由下方「已診斷疾病(ICD-10)」+ 病歷重點 + 年齡 表達。
@@ -2278,7 +2343,7 @@ def _floating_chat_fragment() -> None:
 # 大型「啟動 Pipeline」按鈕在這裡,使用者第一次進入時必須點它才會跑 Pipeline。
 # 封面下方依序是 SECTION · 01 (Agent 劇場) → 02 (主儀表板) → 03 (24h 趨勢)
 # → 04 (污染物剖析) → 05 (環境關聯) → 06 (官方 vs 民間) → 07 (健康預警)
-# → 08 (個人化推薦) → 09 (健康日誌) → 10 (個人訂閱)
+# → 08 (個人化推薦) → 09 (健康日誌) → 10 (Agent Bot)
 # =============================================================================
 _llm_prov_name = LLM_PROVIDERS[st.session_state.llm_provider]["name"]
 _has_llm_key   = bool(st.session_state.llm_key.strip())
@@ -2578,19 +2643,18 @@ def _data_time_str(lag_min, fmt: str = "%H:%M") -> str:
 # =============================================================================
 # 整個應用的核心 — Pipeline 跑完後最重要的視覺化區域。包含:
 #   - 時間軸 slider:可拖動看過去 24h 的歷史快照
-#   - 「現在 X · 24h 歷史最新 Y · 落後 Z 分鐘」三段資料新鮮度標籤
+#   - 「現在 X · EPA 資料時間 Y · 24h 歷史最新整點 Z」新鮮度標籤(一律絕對時間)
 #   - 第一列:聚焦城市資訊 + 城市排名長條圖
 #   - 第二列:台灣地圖散點 + PM2.5 vs AQI 散點
-#   - 第三列:20 個城市的資料新鮮度卡片(< 5min 綠 / < 10min 黃 / 其他橘)
-#   - 24h × 20 城市熱力圖(EPA / CAMS 雙 tab 切換)
-#   - 過去 7 天 AQI 紀錄板(從 tsdb 累積的 CAMS 資料)
+#   - 第三列:20 個城市的資料時間卡片(燈號依資料真實年齡:<45min 綠 / <90 黃 / 其他橘)
+#   (24h 熱力圖與 7 天紀錄板在 SECTION 03)
 # =============================================================================
 st.markdown("<a id='dash'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 02</span>", unsafe_allow_html=True)
 st.markdown("<div class='section-title'>主儀表板 · 即時空品總覽</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-sub'>點擊「城市排行」橫條圖可鎖定城市 · "
-    "其他圖表會同步高亮 · 滑鼠移上去看詳細數字 · 拖動下方時間軸看過去 24h 的快照</div>",
+    "<div class='section-sub'>預設聚焦<b>你的城市</b>(封面步驟①可改) · 點擊「城市排行」橫條圖可改鎖定任何城市 · "
+    "其他圖表會同步高亮 · 拖動下方時間軸看過去 24h 的快照</div>",
     unsafe_allow_html=True,
 )
 
@@ -2694,7 +2758,21 @@ if ts_df is not None and not ts_df.empty:
                 unsafe_allow_html=True,
             )
 
+# ── 預設聚焦 =「你的城市」(個人化錨點)─────────────────────────────────
+# 個人化不該只活在 SECTION 08 之後:一打開儀表板,儀表 / 排行 / 地圖 / 散點的
+# 錨點就是你的城市;點「城市排行」仍可隨時切換聚焦任何城市(全台監控保留)。
+# 你的城市不在快照時(理論上不會發生)才退回「當前最高 AQI」的全國視角。
 focus_id = st.session_state.selected_city
+if focus_id and not (snapshot["city_id"] == focus_id).any():
+    focus_id = None   # 舊點選的城市不在本輪快照(資料來源變動)→ 回到預設錨點,避免 IndexError
+if focus_id:
+    _focus_label = "聚焦城市"
+else:
+    _uc = st.session_state.get("user_city", "taipei")
+    if (snapshot["city_id"] == _uc).any():
+        focus_id, _focus_label = _uc, "📍 你的城市（預設聚焦）"
+    else:
+        _focus_label = "當前最高 AQI"
 focus_row = snapshot[snapshot["city_id"] == focus_id].iloc[0] if focus_id else snapshot.sort_values("aqi", ascending=False).iloc[0]
 
 # ── 個人 AQI 預警橫幅 (P1 #1) ──────────────────────────────────────────
@@ -2768,7 +2846,7 @@ d1, d2 = st.columns([3, 5])
 
 with d1:
     st.markdown(
-        f"<div class='eyebrow'>{'聚焦城市' if focus_id else '當前最高 AQI'}</div>"
+        f"<div class='eyebrow'>{_focus_label}</div>"
         f"<div style='font-size:1.4rem; font-weight:800; color:{focus_row['color']}; "
         f"text-shadow:0 0 12px {focus_row['color']}55; margin-bottom:-0.3rem;'>"
         f"{focus_row['city']}</div>"
@@ -2892,13 +2970,14 @@ st.markdown("<br>", unsafe_allow_html=True)
 # SECTION · 03 24 小時趨勢 (TRENDS)
 # =============================================================================
 # 多城市的 24h AQI 趨勢線圖。使用者可在 multiselect 選擇要比較的城市。
-# 原本右側還有 6h AQI 預測,但 2026-05-13 移除(使用者改用訂閱推送獲取未來資訊)。
+# 原本右側還有 6h AQI 預測,但 2026-05-13 移除(np.random 合成預測、非真實,會誤導)。
 # =============================================================================
 st.markdown("<a id='trend'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 03</span>", unsafe_allow_html=True)
 st.markdown("<div class='section-title'>24 小時趨勢</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-sub'>過去 24 小時各城市的 AQI 走勢，可多選比較。</div>",
+    "<div class='section-sub'>過去 24 小時的 AQI 走勢 — 預設只放<b>你的城市</b>,要比較再多選；"
+    "點「城市排行」鎖定的城市也會自動加入(📍 粗線)。</div>",
     unsafe_allow_html=True,
 )
 
@@ -2918,7 +2997,7 @@ if selected != st.session_state.trend_cities:
 # let the user mute lines per-city if the chart gets too busy.
 show_ids = list(dict.fromkeys((selected or []) + ([focus_id] if focus_id else []))) or selected
 if show_ids:
-    st.plotly_chart(make_trend_line(ts_df, show_ids),
+    st.plotly_chart(make_trend_line(ts_df, show_ids, highlight=focus_id),
                      width='stretch', key="trend_line",
                      config={"displayModeBar": False})
 else:
@@ -2950,13 +3029,15 @@ EPA 即時(432)反映**測站當下**;EPA 歷史(488)用於**追蹤趨勢**;CAMS
 _heat_tab_epa, _heat_tab_cams = st.tabs(["🏛 EPA 官方測站", "🌫 CAMS 大氣模式"])
 with _heat_tab_epa:
     if ts_df is not None and not ts_df.empty:
-        st.plotly_chart(make_heatmap(ts_df), width='stretch', key="heatmap_epa",
+        st.plotly_chart(make_heatmap(ts_df, highlight_city=focus_row["city"]),
+                         width='stretch', key="heatmap_epa",
                          config={"displayModeBar": False})
     else:
         st.info("EPA 歷史資料未取得（請確認 sidebar 已填 EPA api_key）— 改看右側 CAMS tab。")
 with _heat_tab_cams:
     if cams_ts_df is not None and not cams_ts_df.empty:
-        st.plotly_chart(make_heatmap(cams_ts_df), width='stretch', key="heatmap_cams",
+        st.plotly_chart(make_heatmap(cams_ts_df, highlight_city=focus_row["city"]),
+                         width='stretch', key="heatmap_cams",
                          config={"displayModeBar": False})
         st.caption("資料來源：Open-Meteo · Copernicus CAMS Atmospheric Composition Reanalysis")
     else:
@@ -2974,35 +3055,84 @@ st.markdown(
 )
 st.markdown(
     "<div class='tiny muted' style='margin-bottom:0.5rem;'>"
-    "從本機 SQLite 累積的 CAMS 模式歷史資料計算，每跑一次 Pipeline 就會補齊最新一週。"
+    "資料來自本機 SQLite 累積的 <b>CAMS 模式</b>逐時歷史(每跑一次 Pipeline 補齊最新一週)。"
+    "「全台排行」大數字 = 各城<b>本週最高小時 AQI(峰值)</b>;"
+    "「所選城市」逐日卡大數字 = <b>當天 24 小時平均</b>。"
     "</div>",
     unsafe_allow_html=True,
 )
-if _week_top is None or _week_top.empty:
-    st.info("時序快取還沒有累積資料 — 跑一次 Pipeline 就會自動拉 CAMS 過去 7 天進來。")
+# 兩種視角可切換:全台排行(本週哪裡最差)/ 所選城市的 7 天逐日紀錄(個人化錨點)
+_board_mode = st.radio(
+    "紀錄板視角",
+    options=["🏆 全台週峰值排行", f"📍 {focus_row['city']} 的 7 天紀錄"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="week_board_mode",
+)
+if _board_mode.startswith("🏆"):
+    if _week_top is None or _week_top.empty:
+        st.info("時序快取還沒有累積資料 — 跑一次 Pipeline 就會自動拉 CAMS 過去 7 天進來。")
+    else:
+        rank_cols = st.columns(min(5, len(_week_top)))
+        for idx, (col, row) in enumerate(zip(rank_cols, _week_top.head(5).itertuples(index=False))):
+            level = aqi_to_level(row.max_aqi)
+            col.markdown(
+                f"<div class='kpi-card' style='min-width:0; border-color:{level['color']}44;'>"
+                f"<div class='kpi-label'>#{idx+1} · {escape(row.city)} · 週峰值</div>"
+                f"<div class='kpi-value' style='color:{level['color']}; font-size:1.6rem;'>{row.max_aqi:.0f}</div>"
+                f"<div class='kpi-sub'>週平均 {row.avg_aqi:.0f}（{int(row.n_hours)}h 樣本）</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        # Detail expander with the full top-10 table
+        with st.expander(f"查看完整 top-{len(_week_top)} 表 + 平均/最低 AQI", expanded=False):
+            _disp = _week_top.rename(columns={
+                "city": "城市", "max_aqi": "週峰值",
+                "avg_aqi": "週平均", "min_aqi": "週最低", "n_hours": "樣本小時數",
+            })[["城市", "週峰值", "週平均", "週最低", "樣本小時數"]]
+            st.dataframe(
+                _disp.style.background_gradient(subset=["週峰值"], cmap="RdYlGn_r"),
+                use_container_width=True,
+                height=60 + 32 * len(_disp),
+            )
 else:
-    rank_cols = st.columns(min(5, len(_week_top)))
-    for idx, (col, row) in enumerate(zip(rank_cols, _week_top.head(5).itertuples(index=False))):
-        level = aqi_to_level(row.max_aqi)
-        col.markdown(
-            f"<div class='kpi-card' style='min-width:0; border-color:{level['color']}44;'>"
-            f"<div class='kpi-label'>#{idx+1} · {escape(row.city)}</div>"
-            f"<div class='kpi-value' style='color:{level['color']}; font-size:1.6rem;'>{row.max_aqi:.0f}</div>"
-            f"<div class='kpi-sub'>峰值 · 平均 {row.avg_aqi:.0f}（{int(row.n_hours)}h）</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-    # Detail expander with the full top-10 table
-    with st.expander(f"查看完整 top-{len(_week_top)} 表 + 平均/最低 AQI", expanded=False):
-        _disp = _week_top.rename(columns={
-            "city": "城市", "max_aqi": "週峰值",
-            "avg_aqi": "週平均", "min_aqi": "週最低", "n_hours": "樣本小時數",
-        })[["城市", "週峰值", "週平均", "週最低", "樣本小時數"]]
-        st.dataframe(
-            _disp.style.background_gradient(subset=["週峰值"], cmap="RdYlGn_r"),
-            use_container_width=True,
-            height=60 + 32 * len(_disp),
-        )
+    # 📍 所選城市視角:7 天逐日卡(均值著色)+ 展開看逐時曲線
+    _hist7 = tsdb.city_history(focus_id, hours=168, sources=_aqi_src)
+    if _hist7 is None or _hist7.empty:
+        st.info(f"時序快取還沒有 {focus_row['city']} 的資料 — 跑一次 Pipeline 會自動拉 CAMS 過去 7 天回來。")
+    else:
+        _daily7 = (_hist7.assign(_d=_hist7["ts"].dt.strftime("%m/%d"))
+                          .groupby("_d", sort=True)["aqi"]
+                          .agg(["mean", "max", "min"]).round(1))
+        day_cols = st.columns(len(_daily7))
+        for col, (_d, _r) in zip(day_cols, _daily7.iterrows()):
+            _lv = aqi_to_level(_r["mean"])
+            col.markdown(
+                f"<div class='kpi-card' style='min-width:0; border-color:{_lv['color']}44;'>"
+                f"<div class='kpi-label'>{_d} · 日均</div>"
+                f"<div class='kpi-value' style='color:{_lv['color']}; font-size:1.6rem;'>{_r['mean']:.0f}</div>"
+                f"<div class='kpi-sub'>峰 {_r['max']:.0f} · 低 {_r['min']:.0f}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        with st.expander(f"{focus_row['city']} 7 天逐時曲線（{len(_hist7)} 筆 hourly）", expanded=False):
+            import plotly.graph_objects as _go
+            _figw = _go.Figure()
+            _figw.add_trace(_go.Scatter(
+                x=_hist7["ts"], y=_hist7["aqi"], mode="lines",
+                line=dict(color="#00d9ff", width=2),
+                hovertemplate="%{x|%m/%d %H:%M}<br>AQI: <b>%{y:.1f}</b><extra></extra>",
+            ))
+            _figw.update_layout(
+                height=260,
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter, sans-serif", color="#e8eef7", size=11),
+                margin=dict(l=40, r=20, t=10, b=30),
+                xaxis=dict(gridcolor="rgba(0,217,255,0.08)", tickfont=dict(color="#8b95a8")),
+                yaxis=dict(gridcolor="rgba(0,217,255,0.08)", tickfont=dict(color="#8b95a8"), title="AQI"),
+            )
+            st.plotly_chart(_figw, use_container_width=True,
+                            config={"displayModeBar": False}, key="week_city_hist")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -3038,14 +3168,14 @@ with p1:
     )
     show_radar = radar_cities if radar_cities else st.session_state.radar_cities
     if show_radar:
-        st.plotly_chart(make_pollutant_radar(snapshot, show_radar),
+        st.plotly_chart(make_pollutant_radar(snapshot, show_radar, highlight=focus_id),
                          width='stretch', key="radar",
                          config={"displayModeBar": False})
 
 with p2:
     st.markdown("<div class='eyebrow'>各城市污染物組成</div>", unsafe_allow_html=True)
     st.markdown("<div class='tiny muted' style='margin-bottom:0.4rem;'>標準化後堆疊，顯示哪種污染物是該城市的主要貢獻者</div>", unsafe_allow_html=True)
-    st.plotly_chart(make_stacked_composition(snapshot),
+    st.plotly_chart(make_stacked_composition(snapshot, highlight=focus_id),
                      width='stretch', key="stacked",
                      config={"displayModeBar": False})
 
@@ -3063,7 +3193,7 @@ st.markdown("<a id='env'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 05</span>", unsafe_allow_html=True)
 st.markdown("<div class='section-title'>環境關聯</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='section-sub'>風從哪裡來、濕度如何影響、衛星看到什麼。"
+    "<div class='section-sub'>風從哪裡來、濕度怎麼跟 AQI 互動。"
     "這些跟空品高度相關但常被忽略的維度，都在這裡。</div>",
     unsafe_allow_html=True,
 )
@@ -3078,8 +3208,8 @@ with e1:
 
 with e2:
     st.markdown("<div class='eyebrow'>濕度 × AQI 相關性</div>", unsafe_allow_html=True)
-    st.markdown("<div class='tiny muted' style='margin-bottom:0.4rem;'>含趨勢線與皮爾森相關係數</div>", unsafe_allow_html=True)
-    st.plotly_chart(make_humidity_scatter(snapshot), width='stretch', key="humid",
+    st.markdown("<div class='tiny muted' style='margin-bottom:0.4rem;'>含趨勢線與皮爾森相關係數 · 只標 📍 所選城市與極端值,其餘滑鼠查看</div>", unsafe_allow_html=True)
+    st.plotly_chart(make_humidity_scatter(snapshot, highlight=focus_id), width='stretch', key="humid",
                      config={"displayModeBar": False})
 
 # Weather cards
@@ -3143,6 +3273,14 @@ st.markdown(
     "兩者出現大落差，往往是區域熱點的早期訊號。離島地區（澎湖、金門）"
     "兩套網路皆無部署，會顯示「無民間感測」。</div>",
     unsafe_allow_html=True,
+)
+st.info(
+    "ℹ️ **主畫面的 AQI 一律採官方 EPA**（法定計算、綜合 6 種污染物、每縣市取測站平均）"
+    "— 民間感測器**不混入**主數字、只在這一區並排對照。"
+    "兩者各有所長:官方權威、有完整 AQI;民間密度高(~1 萬顆)、更貼近街道實際呼吸環境。"
+    "我們選擇**呈現差異而非融合成一個數字** — 融合會犧牲可追溯性,且民間多半只量 PM2.5,"
+    "硬湊成 AQI 反而失真。",
+    icon="ℹ️",
 )
 
 # Report LASS cleaning numbers if we have them — real, not made up
@@ -3210,12 +3348,14 @@ st.markdown("<br>", unsafe_allow_html=True)
 # 「心血管」對沒病史的人多餘,「氣喘」對沒氣喘的人沒用。
 #
 # 改版後流程:
-#   1. 檢查使用者是否填過 Section 08 的「進階個人健康檔案」
+#   1. 檢查使用者是否填過封面「步驟① 個人健康檔案」
 #      (年齡 / BMI / ICD-10 已診斷疾病 / 病歷重點 / 上傳的病歷文件)
-#   2. 沒填 → 顯示 CTA banner 引導去填,城市卡片只放 AQI 等級通用建議
-#   3. 有填 → Agent C 已生成 <<<CITY:NAME>>> sentinel 格式的個人建議,
-#      parse 出 {city: advice} dict,每張城市卡的 expander 放對應段落,
-#      明確引用使用者的年齡 / 疾病 / RAG 檢索到的病歷。
+#   2. 沒填 → 顯示 CTA banner 引導去填
+#   3. 有填 → 頂部 featured 卡顯示「所選城市」的一份詳細個人化建議
+#      (Agent C 單城市生成,分 5 小節;點排行換聚焦後可按鈕單獨重生)
+#   4. 縣市卡採「雙層門檻」:你的城市依你設定的個人閾值、其他縣市依公定
+#      AQI > 100;兩層都沒人達標才顯示 all-clear(與 SECTION 02 橫幅同邏輯,
+#      不會出現「上面喊超標、下面說沒事」)。不再 20 張卡每張塞通用建議。
 # =============================================================================
 st.markdown("<a id='health'></a>", unsafe_allow_html=True)
 st.markdown("<span class='eyebrow'>SECTION · 07</span>", unsafe_allow_html=True)
@@ -3227,18 +3367,51 @@ per_city_advice = parse_agent_c_per_city(st.session_state.get("agent_c_advisorie
 
 if profile_filled:
     st.markdown(
-        f"<div class='section-sub'>已偵測到你的個人健康檔案 — 每張城市卡片下方的"
-        f"「📋 給你的個人建議」展開後是預警員針對你的年齡 / BMI / 已診斷疾病 / "
-        f"上傳病歷量身寫的建議({len(per_city_advice)} 城市已生成)。</div>",
+        "<div class='section-sub'>已偵測到你的個人健康檔案 — 預警員只針對<b>所選城市</b>"
+        "生成一份分節的詳細建議(更深入,token 也省 ~20 倍);"
+        "點「城市排行」換聚焦後,可一鍵為新城市重新產生。"
+        "下方僅列達預警的縣市 — <b>你的城市依你設定的閾值</b>,其他縣市依公定 AQI &gt; 100。</div>",
         unsafe_allow_html=True,
     )
+    # ── Featured:所選城市的詳細個人化建議(Agent C 單城市輸出)──────────
+    _gen_city_id = st.session_state.get("agent_c_city_id")
+    _gen_city_name = CITY_BY_ID[_gen_city_id]["name"] if _gen_city_id in CITY_BY_ID else None
+    _gen_advice = per_city_advice.get(_gen_city_name) if _gen_city_name else None
+    if _gen_advice:
+        st.markdown(
+            f"<div class='eyebrow' style='color:#00e676; margin-top:0.3rem;'>"
+            f"🩺 預警員 · 給你的詳細建議 — {escape(_gen_city_name)}</div>",
+            unsafe_allow_html=True,
+        )
+        with st.container(border=True):
+            st.markdown(_gen_advice)
+            st.markdown(
+                "<div class='tiny muted' style='margin-top:0.4rem;'>"
+                "📚 依據:你的個人健康檔案 + 個人上傳病歷(若有)+ WHO 2021 / EPA NAAQS / Lancet 2023 · "
+                "LLM 生成,僅供參考、非醫療診斷</div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.info("預警員的詳細建議尚未生成(Pipeline 未跑完或 LLM 失敗)— 可按下方按鈕單獨生成。")
+    _regen_label = (
+        f"🔁 改為「{focus_row['city']}」重新產生詳細建議"
+        if focus_row["city"] != (_gen_city_name or "")
+        else f"🔁 用最新數據重新產生「{focus_row['city']}」建議"
+    )
+    if st.button(_regen_label, key="regen_advisor_btn"):
+        with st.spinner(f"預警員為「{focus_row['city']}」撰寫詳細建議中(約 10-30 秒)…"):
+            _regen_err = _regen_advisor_for_city(snapshot, str(focus_row["city_id"]))
+        if _regen_err:
+            st.error(_regen_err)
+        else:
+            st.rerun()
 else:
     st.markdown(
-        "<div class='section-sub'>下方各城市顯示通用的 AQI 等級建議。"
-        "想要個人化建議(針對你的年齡 / 疾病 / 病歷),請先填寫 Section 08「進階個人健康檔案」。</div>",
+        "<div class='section-sub'>下方僅列達預警的縣市(<b>你的城市依你設定的閾值</b>,其他縣市依公定 AQI &gt; 100)。"
+        "想要個人化詳細建議(針對你的年齡 / 疾病 / 病歷),請先填寫封面「步驟① 個人健康檔案」。</div>",
         unsafe_allow_html=True,
     )
-    # CTA banner — 橘色強調,點 anchor 跳到 Section 08
+    # CTA banner — 橘色強調,引導捲到封面「步驟①」填寫
     st.markdown(
         """
         <div class='glass-card' style='border-color:#ff8c42;
@@ -3246,68 +3419,96 @@ else:
              margin-bottom:1rem;'>
           <div class='eyebrow' style='color:#ff8c42;'>🎯 想看到專屬於你的建議?</div>
           <div style='font-size:0.95rem; line-height:1.65; margin-top:0.4rem;'>
-            填一下下面的「進階個人健康檔案」(Section 08),預警員就會依你的
+            填一下封面「步驟① 個人健康檔案」,預警員就會依你的
             <b>年齡 / BMI / 已診斷疾病(ICD-10)/ 自填病歷 / 上傳的病歷文件</b>,
-            為<b>每個城市</b>寫一段針對你個人風險的具體建議
-            (例如 72 歲 + COPD 在 PM2.5 30 μg/m³ 該不該出門、需要哪種等級的口罩)。
+            為<b>你選的城市</b>寫一份分節的詳細建議
+            (現況風險 / 外出建議 / 防護裝備 / 症狀警訊 — 例如 72 歲 + COPD 在
+            PM2.5 30 μg/m³ 該不該出門、需要哪種等級的口罩)。
             <br><br>
-            <a href='#perso' style='color:#ff8c42; font-weight:700; text-decoration:none;
+            <span style='color:#ff8c42; font-weight:700;
                padding:6px 14px; border:1px solid #ff8c42; border-radius:8px;
-               display:inline-block;'>↓ 跳到 Section 08 進階個人健康檔案</a>
+               display:inline-block;'>↑ 捲到頁面最上方的「步驟① 個人健康檔案」填寫</span>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-# City alert cards (3 per row) — 共用版面,只有 expander 內容依 profile 切換
-sorted_snap = snapshot.sort_values("aqi", ascending=False)
+# ⚠ 雙層預警門檻(個人化的核心,跟 SECTION 02 紅色橫幅同一套邏輯):
+#   - 你的城市:用「你自己設定的 AQI 閾值」判斷(敏感的人 50 就該被警告,
+#     不能等公定 100 — 否則上面橫幅喊超標、這裡卻說 all-clear,自打嘴巴)
+#   - 其他縣市:用公定 AQI > 100(「對敏感族群不健康」橘色起算)— 別人的城市
+#     不該用你的個人敏感度去刷紅一片
+# 你的城市達標 → 📍 置頂。兩層都沒人達標 → 綠色 all-clear(兩個條件都講清楚)。
+ALERT_AQI = 100                                                     # 公定門檻
+_thr7 = int(st.session_state.get("user_aqi_threshold", 100))        # 你的個人閾值
+sorted_snap = snapshot[
+    (snapshot["aqi"] > ALERT_AQI)
+    | ((snapshot["city_id"] == _my_city_id) & (snapshot["aqi"] > _thr7))
+].sort_values("aqi", ascending=False)
+if (sorted_snap["city_id"] == _my_city_id).any():
+    sorted_snap = pd.concat([
+        sorted_snap[sorted_snap["city_id"] == _my_city_id],
+        sorted_snap[sorted_snap["city_id"] != _my_city_id],
+    ])
 
-for chunk_start in range(0, len(sorted_snap), 3):
-    chunk = sorted_snap.iloc[chunk_start:chunk_start + 3]
-    cols = st.columns(3)
-    for i, (_, row) in enumerate(chunk.iterrows()):
-        with cols[i]:
-            lvl = aqi_to_level(row["aqi"])
-            st.markdown(
-                f"""
-                <div class='alert-card' style='--accent:{row["color"]}; --accent-glow:{row["color"]}55; border-left-color:{row["color"]};'>
-                  <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
-                    <div>
-                      <div class='alert-city'>{row['city']}</div>
-                      <div class='tiny muted'>{row['region']} · 資料時間 {_data_time_str(row['updated_min_ago'])}</div>
+if sorted_snap.empty:
+    _my_aqi_row = snapshot[snapshot["city_id"] == _my_city_id]
+    if not _my_aqi_row.empty:
+        _my_clear_txt = (
+            f"你的城市 <b>{escape(CITY_BY_ID[_my_city_id]['name'])}</b> 目前 AQI "
+            f"<b>{float(_my_aqi_row['aqi'].iloc[0]):.0f}</b>,也低於你設定的個人閾值"
+            f"(<b>{_thr7}</b>)。"
+        )
+    else:
+        _my_clear_txt = f"你的城市 <b>{escape(CITY_BY_ID[_my_city_id]['name'])}</b> 本輪暫無資料。"
+    st.markdown(
+        f"<div class='glass-card' style='border-color:#00e67655; "
+        f"background:linear-gradient(135deg, rgba(0,230,118,0.10), rgba(15,24,48,0.5));'>"
+        f"✅ 全台沒有縣市達公定預警等級(AQI &gt; {ALERT_AQI});{_my_clear_txt}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        f"<div class='eyebrow' style='margin-top:0.6rem;'>⚠ 預警縣市 · {len(sorted_snap)} 個"
+        f"(你的城市門檻 = 你設定的 <b>{_thr7}</b>;其他縣市 = 公定 AQI &gt; {ALERT_AQI})</div>",
+        unsafe_allow_html=True,
+    )
+    for chunk_start in range(0, len(sorted_snap), 3):
+        chunk = sorted_snap.iloc[chunk_start:chunk_start + 3]
+        cols = st.columns(3)
+        for i, (_, row) in enumerate(chunk.iterrows()):
+            with cols[i]:
+                lvl = aqi_to_level(row["aqi"])
+                # 你的城市若是「因個人閾值」入列(AQI ≤ 公定 100),通用等級建議會寫
+                # 「可正常活動」— 跟預警框架自相矛盾。改放個人化的警告文字。
+                _personal_trigger = (row["city_id"] == _my_city_id) and (row["aqi"] <= ALERT_AQI)
+                _advice7 = (
+                    f"⚠ 已超過<b>你設定的個人預警閾值({_thr7})</b> — 對你而言應開始注意;"
+                    f"具體防護請看上方「給你的詳細建議」。"
+                    if _personal_trigger else lvl["advice"]
+                )
+                st.markdown(
+                    f"""
+                    <div class='alert-card' style='--accent:{row["color"]}; --accent-glow:{row["color"]}55; border-left-color:{row["color"]};'>
+                      <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
+                        <div>
+                          <div class='alert-city'>{'📍 ' if row['city_id'] == _my_city_id else ''}{row['city']}</div>
+                          <div class='tiny muted'>{row['region']} · 資料時間 {_data_time_str(row['updated_min_ago'])}</div>
+                        </div>
+                        <div style='text-align:right;'>
+                          <div class='alert-aqi' style='color:{row["color"]}; text-shadow:0 0 14px {row["color"]}55;'>{row['aqi']:.0f}</div>
+                          <div class='tiny' style='color:{row["color"]}; font-weight:700;'>{lvl['name']}{'(超過你的閾值)' if _personal_trigger else ''}</div>
+                        </div>
+                      </div>
+                      <div style='margin-top:0.6rem; padding:0.5rem 0.7rem; background:rgba(0,0,0,0.25); border-radius:8px; font-size:0.85rem;'>
+                        {_advice7}
+                      </div>
                     </div>
-                    <div style='text-align:right;'>
-                      <div class='alert-aqi' style='color:{row["color"]}; text-shadow:0 0 14px {row["color"]}55;'>{row['aqi']:.0f}</div>
-                      <div class='tiny' style='color:{row["color"]}; font-weight:700;'>{lvl['name']}</div>
-                    </div>
-                  </div>
-                  <div style='margin-top:0.6rem; padding:0.5rem 0.7rem; background:rgba(0,0,0,0.25); border-radius:8px; font-size:0.85rem;'>
-                    {lvl['advice']}
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            # Expander 只在「有填個人檔案」時才出現 — 沒填的話卡片就是純通用建議
-            if profile_filled:
-                personal_text = per_city_advice.get(row["city"])
-                with st.expander(f"📋 給你的個人建議 · {row['city']}", expanded=False):
-                    if personal_text:
-                        st.markdown(personal_text)
-                        st.markdown(
-                            "<div class='tiny muted' style='margin-top:0.6rem;'>"
-                            "📚 預警員引用:你的個人檔案 + 個人上傳病歷(若有)+ WHO 2021 / EPA NAAQS / Lancet 2023"
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.info(
-                            f"預警員還沒為「{row['city']}」生成個人建議。"
-                            f"可能原因:Pipeline 沒跑 / LLM 失敗 / 格式 parse 失敗。"
-                            f"按下 sidebar「↻ 重新執行 Pipeline」再試一次。"
-                        )
-
+                    """,
+                    unsafe_allow_html=True,
+                )
 st.markdown("<br>", unsafe_allow_html=True)
 
 
@@ -3341,8 +3542,13 @@ with per1:
     user_city = st.session_state.get("user_city", "taipei")
     st.caption("↑ 個人健康檔案在封面「步驟 ①」 — 捲到頁面最上方可編輯 / 填寫 / 清除")
 
-    # Highlight relevant info
-    my_row = snapshot[snapshot["city_id"] == user_city].iloc[0]
+    # Highlight relevant info(防護:該縣市本輪快照無資料時退回全台最高,不讓 SECTION 08-10 整段炸掉)
+    _my_rows = snapshot[snapshot["city_id"] == user_city]
+    if _my_rows.empty:
+        st.info(f"本輪快照沒有「{CITY_BY_ID[user_city]['name']}」的資料(該縣市暫無測站回報)— 以下暫以全台最高 AQI 城市示意。")
+        my_row = snapshot.sort_values("aqi", ascending=False).iloc[0]
+    else:
+        my_row = _my_rows.iloc[0]
     st.markdown(
         f"""
         <div class='glass-card' style='border-color:{my_row["color"]}; background:linear-gradient(135deg, {my_row["color"]}15, rgba(15,24,48,0.5)); margin-top:1rem;'>
@@ -3362,7 +3568,7 @@ with per1:
         unsafe_allow_html=True,
     )
 
-# ── 個人化敏感族群指數卡 (P1 #3) ─────────────────────────────────────────
+# ── 個人化健康指數卡 (P1 #3) ─────────────────────────────────────────────
 # 你的個人化健康指數(以「你這個人」為單位,不再分五大族群)
 # ───────────────────────────────────────────────────────────────────────────
 # 改版理由:本平台是「個人化」,不再針對老人/幼童/氣喘/心血管/孕婦 五大族群分桶。
@@ -3758,7 +3964,7 @@ st.markdown(
     "2. 把本專案的 `hermes_skills/aqi-live/` skill 裝給它(讓它會讀 `latest_aqi.json`)。\n"
     "3. 在聊天平台(Discord / LINE / Slack…)開一個 Bot、邀請進伺服器,綁到該 agent。\n"
     "4. 之後在聊天室打 `@bot 台中現在空氣如何`,bot 就會讀最新匯出 + 你的 persona 回答。\n\n"
-    "詳細步驟見 `hermes_skills/aqi-live/SKILL.md`(以 Hermes 為範例)與 README『進階整合』段。"
+    "詳細步驟見 `hermes_skills/aqi-live/SKILL.md`(以 Hermes 為範例)與 README『Agent Bot 整合』段。"
 )
 st.caption(
     "本機快速驗證(不用聊天平台):在專案目錄跑 "

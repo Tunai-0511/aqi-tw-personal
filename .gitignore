@@ -40,3 +40,15 @@ dist/
 *.sqlite
 *.sqlite-journal
 agent_aqi.sqlite
+
+# Node
+node_modules/
+
+# Claude / Gemini agent
+.claude/
+
+# Teammate module (external/cal-env-watch) — OAuth / API-key JSONs must never enter the repo
+# (vendored files audited: zero embedded secrets; these patterns are a tripwire)
+external/**/secrets/
+google-cal*.json
+moenv.json

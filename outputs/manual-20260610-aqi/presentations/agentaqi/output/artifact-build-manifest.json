@@ -1,0 +1,27 @@
+{
+  "output": "C:\\Users\\tunai\\Downloads\\aqi-tw-personal-2\\outputs\\manual-20260610-aqi\\presentations\\agentaqi\\output\\test.pptx",
+  "outputBytes": 12702,
+  "slideCount": 1,
+  "slideSize": {
+    "width": 1280,
+    "height": 720
+  },
+  "previewDir": "C:\\Users\\tunai\\Downloads\\aqi-tw-personal-2\\outputs\\manual-20260610-aqi\\presentations\\agentaqi\\preview",
+  "previewPaths": [
+    "C:\\Users\\tunai\\Downloads\\aqi-tw-personal-2\\outputs\\manual-20260610-aqi\\presentations\\agentaqi\\preview\\slide-01.png"
+  ],
+  "layoutDir": "C:\\Users\\tunai\\Downloads\\aqi-tw-personal-2\\outputs\\manual-20260610-aqi\\presentations\\agentaqi\\layout",
+  "layoutResults": [
+    {
+      "layoutPath": "C:\\Users\\tunai\\Downloads\\aqi-tw-personal-2\\outputs\\manual-20260610-aqi\\presentations\\agentaqi\\layout\\slide-01.layout.json"
+    }
+  ],
+  "slides": [
+    {
+      "index": 1,
+      "requestedSlideNumber": 1,
+      "modulePath": "C:\\Users\\tunai\\Downloads\\aqi-tw-personal-2\\outputs\\manual-20260610-aqi\\presentations\\agentaqi\\slides\\slide-01.mjs",
+      "exportName": "slide01"
+    }
+  ]
+}

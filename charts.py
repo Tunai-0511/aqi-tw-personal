@@ -18,8 +18,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 
 # 從 data.py 引入 AQI 等級資料(顏色 / 等級名 / 建議),共用同一份事實來源
 from data import POLLUTANTS, aqi_to_level
@@ -275,7 +273,7 @@ def make_pm25_aqi_scatter(df: pd.DataFrame, highlight: str | None = None) -> go.
 # ─── 24h AQI 趨勢線 ──────────────────────────────────────────────────────────
 
 
-def make_trend_line(ts_df: pd.DataFrame, city_ids: list[str]) -> go.Figure:
+def make_trend_line(ts_df: pd.DataFrame, city_ids: list[str], highlight: str | None = None) -> go.Figure:
     """多城市的 24h AQI 趨勢線圖,使用者可多選比較。
 
     每個城市畫一條曲線(`shape="spline"` + `smoothing=0.6` 做平滑曲線),
@@ -287,6 +285,8 @@ def make_trend_line(ts_df: pd.DataFrame, city_ids: list[str]) -> go.Figure:
         時序資料,需包含 city_id, city, timestamp, aqi
     city_ids : list[str]
         要顯示的城市 id 清單;可長可短(實測 20 條也順)
+    highlight : str | None
+        所選城市 id(個人化錨點)— 該線加粗 + 📍 標記,其餘線降不透明度
     """
     fig = go.Figure()
     for i, cid in enumerate(city_ids):
@@ -294,13 +294,17 @@ def make_trend_line(ts_df: pd.DataFrame, city_ids: list[str]) -> go.Figure:
         d = ts_df[ts_df["city_id"] == cid].sort_values("timestamp")
         if d.empty:
             continue   # 該城市可能沒有時序資料,跳過避免空 trace
+        is_focus = (cid == highlight)
         fig.add_trace(go.Scatter(
             x=d["timestamp"], y=d["aqi"],
             mode="lines+markers",
-            name=d["city"].iloc[0],                              # 取出該城市的中文名
+            name=("📍 " if is_focus else "") + d["city"].iloc[0],  # 取出該城市的中文名
             # spline + smoothing 0.6 = 適度平滑(0=完全折線,1=過度平滑失真)
-            line=dict(color=PALETTE[i % len(PALETTE)], width=2.2, shape="spline", smoothing=0.6),
-            marker=dict(size=5),
+            line=dict(color=PALETTE[i % len(PALETTE)],
+                      width=4.5 if is_focus else 1.8,
+                      shape="spline", smoothing=0.6),
+            marker=dict(size=7 if is_focus else 4),
+            opacity=1.0 if is_focus else 0.75,
             hovertemplate="<b>%{fullData.name}</b><br>%{x|%m/%d %H:%M}<br>AQI: <b>%{y:.1f}</b><extra></extra>",
         ))
     fig.update_layout(**_base_layout(
@@ -315,7 +319,7 @@ def make_trend_line(ts_df: pd.DataFrame, city_ids: list[str]) -> go.Figure:
 # ─── 熱力時序圖(小時 × 城市) ──────────────────────────────────────────────
 
 
-def make_heatmap(ts_df: pd.DataFrame) -> go.Figure:
+def make_heatmap(ts_df: pd.DataFrame, highlight_city: str | None = None) -> go.Figure:
     """24h × 20 城市的 AQI 熱力圖。
 
     座標軸:x = 每小時時點、y = 城市名、z(色階)= AQI 數值
@@ -330,6 +334,9 @@ def make_heatmap(ts_df: pd.DataFrame) -> go.Figure:
     # pivot_table:把 long 表格轉成 wide 矩陣(city × hour),儲存格值是 aqi
     pv = (ts_df.assign(hour=ts_df["timestamp"].dt.strftime("%m/%d %H:00"))
                 .pivot_table(index="city", columns="hour", values="aqi"))
+    # 📍 標示所選城市(個人化錨點)— y 軸標籤前綴,讓使用者一眼找到自己的列
+    if highlight_city and highlight_city in pv.index:
+        pv.index = ["📍 " + c if c == highlight_city else c for c in pv.index]
     fig = go.Figure(go.Heatmap(
         z=pv.values, x=pv.columns, y=pv.index,
         # 自訂色階,跟 AQI 分級色對齊(0=綠、50=黃、100=橘、150=紅、200=紫、300=深紫紅)
@@ -357,7 +364,7 @@ def make_heatmap(ts_df: pd.DataFrame) -> go.Figure:
 # ─── 污染物雷達圖 ────────────────────────────────────────────────────────────
 
 
-def make_pollutant_radar(snapshot: pd.DataFrame, city_ids: list[str]) -> go.Figure:
+def make_pollutant_radar(snapshot: pd.DataFrame, city_ids: list[str], highlight: str | None = None) -> go.Figure:
     """多城市的「6 種污染物」雷達圖比較。
 
     每個污染物對應一個軸(PM2.5/PM10/O3/NO2/SO2/CO),每個城市畫一個多邊形。
@@ -379,14 +386,15 @@ def make_pollutant_radar(snapshot: pd.DataFrame, city_ids: list[str]) -> go.Figu
         row = snapshot[snapshot["city_id"] == cid].iloc[0]
         # 標準化每個污染物到 0-100%,並 cap 在 100(避免雷達圖被單一極端值撐爆)
         vals = [min(100, row[p] / ref[p] * 100) for p in POLLUTANTS]
+        is_focus = (cid == highlight)
         fig.add_trace(go.Scatterpolar(
             # 雷達圖要把第一個點再加到最後,線才會自動封口
             r=vals + [vals[0]],
             theta=POLLUTANTS + [POLLUTANTS[0]],
             fill="toself",                                # 填滿多邊形內部(視覺更明顯)
-            name=row["city"],
-            line=dict(color=PALETTE[i % len(PALETTE)], width=2),
-            opacity=0.55,
+            name=("📍 " if is_focus else "") + row["city"],
+            line=dict(color=PALETTE[i % len(PALETTE)], width=4 if is_focus else 2),
+            opacity=0.9 if is_focus else 0.45,
             hovertemplate="<b>%{fullData.name}</b><br>%{theta}: %{r:.1f}%<extra></extra>",
         ))
     fig.update_layout(**_base_layout(
@@ -410,7 +418,7 @@ def make_pollutant_radar(snapshot: pd.DataFrame, city_ids: list[str]) -> go.Figu
 # ─── 堆疊式污染物組成 ───────────────────────────────────────────────────────
 
 
-def make_stacked_composition(snapshot: pd.DataFrame) -> go.Figure:
+def make_stacked_composition(snapshot: pd.DataFrame, highlight: str | None = None) -> go.Figure:
     """20 個城市的堆疊長條圖,顯示各污染物對總強度的貢獻。
 
     用法:看「哪個城市的 AQI 主要是哪幾種污染物推起來的」。例如:
@@ -418,6 +426,10 @@ def make_stacked_composition(snapshot: pd.DataFrame) -> go.Figure:
       - 都會區可能 NO2 / O3 比例高(交通排放)
     """
     df = snapshot.copy()
+    # 📍 標示所選城市(個人化錨點)— y 軸標籤前綴
+    if highlight is not None and "city_id" in df.columns:
+        df["city"] = [("📍 " + c) if cid == highlight else c
+                      for c, cid in zip(df["city"], df["city_id"])]
     # 跟雷達圖同一份標準化規則,確保視覺一致
     ref = {"PM2.5": 50, "PM10": 100, "O3": 100, "NO2": 80, "SO2": 30, "CO": 5}
     for p in POLLUTANTS:
@@ -494,7 +506,7 @@ def make_wind_rose(snapshot: pd.DataFrame) -> go.Figure:
 # ─── 濕度 vs AQI 散點 + 趨勢線 ──────────────────────────────────────────────
 
 
-def make_humidity_scatter(snapshot: pd.DataFrame) -> go.Figure:
+def make_humidity_scatter(snapshot: pd.DataFrame, highlight: str | None = None) -> go.Figure:
     """濕度與 AQI 的散點圖 + 線性回歸 + Pearson 相關係數。
 
     研究問題:濕度高的城市 AQI 是否較低?(理論上濕度高有助於 PM 沉降)
@@ -513,14 +525,33 @@ def make_humidity_scatter(snapshot: pd.DataFrame) -> go.Figure:
     line_x = np.array([x.min() - 2, x.max() + 2])
     line_y = m * line_x + b
 
+    # 📍 所選城市(個人化錨點):放大 + 白色描邊,其餘維持原樣
+    _cids = snapshot["city_id"].tolist() if "city_id" in snapshot.columns else [None] * len(snapshot)
+    _sizes  = [22 if c == highlight else 14 for c in _cids]
+    _lwidth = [2.5 if c == highlight else 1 for c in _cids]
+    _lcolor = ["#ffffff" if c == highlight else "rgba(255,255,255,0.5)" for c in _cids]
+
+    # 標籤去雜:20 個城市常擠在濕度 90-95% 的同一坨,全標字會糊成一團。
+    # 只標「值得標的點」— 📍 所選城市 + AQI 最高 3 名 + 最低 1 名;
+    # 其餘城市不標字,滑鼠 hover 一樣看得到完整數據。
+    if "city_id" in snapshot.columns:
+        _label_ids = (set(snapshot.nlargest(3, "aqi")["city_id"])
+                      | set(snapshot.nsmallest(1, "aqi")["city_id"]))
+        if highlight:
+            _label_ids.add(highlight)
+        _texts = [("📍 " + n) if c == highlight else (n if c in _label_ids else "")
+                  for c, n in zip(_cids, snapshot["city"])]
+    else:
+        _texts = snapshot["city"]
+
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=x, y=y, mode="markers+text",
-        text=snapshot["city"],
+        text=_texts,
         textposition="top center",
         textfont=dict(size=10, color="#c0c8d8"),
-        marker=dict(size=14, color=snapshot["color"],
-                    line=dict(width=1, color="rgba(255,255,255,0.5)")),
+        marker=dict(size=_sizes, color=snapshot["color"],
+                    line=dict(width=_lwidth, color=_lcolor)),
         customdata=np.stack([snapshot["city"], snapshot["humidity"], snapshot["aqi"]], axis=-1),
         hovertemplate="<b>%{customdata[0]}</b><br>濕度: %{x:.0f}%<br>AQI: %{y:.1f}<extra></extra>",
         showlegend=False, name="cities",
@@ -536,12 +567,15 @@ def make_humidity_scatter(snapshot: pd.DataFrame) -> go.Figure:
         height=380,
         xaxis_title="濕度 (%)",
         yaxis_title="AQI",
+        margin=dict(l=60, r=20, t=52, b=50),   # 上方留白給相關係數徽章
     ))
-    # 右上角 annotation 顯眼地秀出相關係數
+    # 相關係數徽章放在「繪圖區上方的留白」(paper 座標,yanchor=bottom 往上長)
+    # — 永遠不會壓到資料點(原本放繪圖區右上角,會擋住高 AQI 城市)
     fig.add_annotation(
-        x=0.98, y=0.96, xref="paper", yref="paper",
+        x=0.0, y=1.0, xref="paper", yref="paper",
+        xanchor="left", yanchor="bottom",
         text=f"<b>相關係數 r = {r:+.2f}</b>",
-        showarrow=False, align="right",
+        showarrow=False,
         font=dict(color=ORANGE, family="JetBrains Mono", size=13),
         bgcolor="rgba(15, 24, 48, 0.8)", bordercolor=ORANGE, borderwidth=1, borderpad=6,
     )

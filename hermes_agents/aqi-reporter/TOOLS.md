@@ -4,7 +4,7 @@
 
 讀 `hermes_export/latest_aqi.json`(AgentAQI Pipeline 每次跑完更新)。
 
-- 提供:全台 20 城市快照、全國概況、分析師摘要、各城市建議、使用者 persona。
+- 提供:全台 20 城市快照、全國概況、分析師摘要、所選城市的詳細建議(advisories 一筆)、使用者 persona。
 - 契約與觸發規則見 `hermes_skills/aqi-live/SKILL.md`。
 - 本機 CLI 預覽(就是我會貼進 Discord 的內容):
   ```

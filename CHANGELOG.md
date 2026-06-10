@@ -12,6 +12,23 @@
 
 ---
 
+## [2026-06-10] 收錄組員模組 cal-env-watch(原樣 vendored)
+
+### Added
+- **`external/cal-env-watch/`** — 組員交付的獨立模組(OpenClaw runtime):Google Calendar ×
+  天氣 × AQI 的「行程事前主動預警」,每 30 分鐘 cron 掃描未來行程,該地點 AQI / 雷雨超標就推
+  Telegram;另含課表批次寫入 Google Calendar 的工具。**9 個檔案逐一 SHA-256 驗證,與組員原檔
+  byte-level 一致(未做任何修改)**。來源:`Downloads/SKILL.md` + `scripts-20260609T162715Z-3-001`
+  + `references-20260609T162714Z-3-001`。
+- 與本體的關係寫進 README「Agent Bot 整合 · 姊妹模組」:本體 = Hermes/Discord **拉取問答**,
+  cal-env-watch = OpenClaw/Telegram **行程推播** — 同一 EPA 資料源、兩種 agent runtime,
+  互補場景、也是「不綁特定產品」的實證。注意:其設定寫死在組員機器
+  (`C:\Users\User\.openclaw\`),本機不直接執行(demo 範圍外)。
+- `.gitignore` 加防呆:擋 `external/**/secrets/`、`google-cal*.json`、`moenv.json`
+  (組員模組引用的 OAuth/金鑰檔永不入 repo;經稽核,vendored 檔案本身零夾帶金鑰)。
+
+---
+
 ## [2026-06-09] 架構圖連線拉直 + 直書標題改水平 + 步驟①置中 + 擋 Clear cache 快捷鍵
 
 ### Fixed
