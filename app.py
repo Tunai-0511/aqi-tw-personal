@@ -25,7 +25,9 @@
   2. **資料流向**:Pipeline 按鈕 → run_pipeline() → 寫 session_state → 圖表渲染
   3. **無頁面切換**:所有功能在單一 Streamlit script,城市深入是 modal dialog
   4. **真實 API 優先,Mock 兜底**:EPA 失敗才用合成資料,且 UI 標示 MOCK
-  5. **每小時自動更新**:`st.fragment(run_every="60m")` 監控,滿 60 分鐘自動重跑
+  5. **自動更新(頁面開著時)**:`st.fragment(run_every="10m")` 每 10 分鐘檢查,
+     跨入新的時鐘小時且過整點 10 分(EPA 發布新一輪後)自動重跑 — 對齊 EPA
+     整點發布(分頁關閉時不會跑 — Streamlit session 模型)
 
 關鍵 session_state 欄位(完整清單在 init_state 函式):
   - `pipeline_done` : 是否跑過至少一次 Pipeline
@@ -225,22 +227,30 @@ _install_hotkey_guard()
 
 
 # =============================================================================
-# 自動更新心跳 (Auto-refresh Tick)
+# 自動更新心跳 (Auto-refresh Tick) — 對齊 EPA 整點發布
 # =============================================================================
-# 使用 `st.fragment(run_every="60m")` 註冊一個每小時自動執行的小區塊。
-# fragment 只重跑這段函式而不重跑整個 app,避免影響使用者正在閱讀的 UI。
-# 改成「每小時一次」(原本是每分鐘):使用者明確表示「所有數據都要一小時抓一次就好,
-# 不要分鐘抓」,過去 60s 心跳即使不真的拉資料,仍會頻繁觸發 fragment 重跑造成
-# 不必要的 Streamlit re-run 成本。
+# EPA aqx_p_432 每小時發布一輪(整點資料約在整點後幾分鐘上架)。所以自動更新不用
+# 「距上次抓取滿 60 分」這種跟著使用者手動時間漂移的節流,而是**對齊時鐘整點**:
+#   跨入新的一個小時、且已過整點 EPA_PUBLISH_GRACE_MIN 分鐘(留給 EPA 上架)
+#   → 自動重跑 Pipeline 一次。每個「時鐘小時」最多抓一次,API 負載不變。
+# fragment 每 10 分鐘醒來檢查(本體只讀幾個 session_state,成本趨近 0),
+# 所以實際觸發落在每小時的 HH:10–HH:20 之間 — 剛好接住 EPA 新一輪數據。
+# ⚠ Streamlit 是「session 跟著瀏覽器走」的模型:分頁開著(websocket 連線中)
+#   fragment 才會定時觸發;分頁關閉 / 電腦休眠就不會跑 — 這不是 bug,是平台特性。
+#   需要「關著也更新」要靠外部排程(Windows 工作排程器跑 headless 抓取腳本)。
 # =============================================================================
-@st.fragment(run_every="60m")
+EPA_PUBLISH_GRACE_MIN = 10   # 整點後留給 EPA 上架新一輪資料的緩衝(分鐘)
+
+
+@st.fragment(run_every="10m")
 def _auto_refresh_tick() -> None:
-    """每小時檢查一次是否該自動重跑 Pipeline。
+    """每 10 分鐘檢查;跨入新的時鐘小時且過了發布緩衝 → 自動重跑 Pipeline。
 
     觸發條件(必須全部成立):
-      1. 使用者開啟了 sidebar「🔄 每小時自動更新數據」toggle
+      1. 使用者開啟了 sidebar「🔄 自動更新」toggle
       2. Pipeline 已經跑過至少一次(`pipeline_done=True`)— 第一次必須使用者手動啟動
-      3. 距上次 Pipeline 完成已 >= 60 分鐘(避免使用者剛手動跑完又被自動觸發)
+      3. 現在所屬的「時鐘小時」晚於上次抓取所屬的小時(= EPA 已有新一輪資料)
+      4. 已過整點 EPA_PUBLISH_GRACE_MIN 分鐘(整點剛過就抓,撈到的常是上一輪)
 
     觸發後:
       - 設 `_pipeline_should_run=True`(後續主腳本會偵測這個 flag)
@@ -253,8 +263,10 @@ def _auto_refresh_tick() -> None:
     last = st.session_state.get("last_pipeline_run_at")
     if last is None:
         return
-    elapsed_min = (datetime.now() - last).total_seconds() / 60
-    if elapsed_min >= 60:
+    now = datetime.now()
+    crossed_hour = (now.replace(minute=0, second=0, microsecond=0)
+                    > last.replace(minute=0, second=0, microsecond=0))
+    if crossed_hour and now.minute >= EPA_PUBLISH_GRACE_MIN:
         st.session_state["_pipeline_should_run"] = True
         # 全頁重跑(scope="app")才能觸發後面的 pipeline launch 區段;
         # 預設 scope="fragment" 只會再跑這個 tick 函式,Pipeline 不會被觸發。
@@ -1281,21 +1293,13 @@ with st.sidebar:
     # Auto-refresh: re-run pipeline every hour without user clicking "重新執行"
     st.markdown("<div class='eyebrow'>自動更新</div>", unsafe_allow_html=True)
     st.session_state.auto_refresh_enabled = st.toggle(
-        "🔄 每小時自動更新數據",
+        "🔄 自動更新（頁面開著時，整點對齊 EPA）",
         value=st.session_state.get("auto_refresh_enabled", True),
         key="auto_refresh_toggle",
-        help="啟動 Pipeline 後，每 1 小時自動重新拉取 EPA 即時資料。關閉則需手動按「重新執行 Pipeline」",
+        help="瀏覽器分頁開著時，每跨入新的一個小時、過整點 10 分（等 EPA 發布新一輪數據）"
+             "就自動重跑 Pipeline，與 EPA 每小時整點發布對齊。"
+             "分頁關閉或電腦休眠時不會更新 — 重開頁面後按「重新執行 Pipeline」即可。",
     )
-    if st.session_state.last_pipeline_run_at is not None:
-        _mins_ago = int((datetime.now() - st.session_state.last_pipeline_run_at).total_seconds() // 60)
-        _next_in = max(0, 60 - _mins_ago) if st.session_state.auto_refresh_enabled else None
-        st.markdown(
-            f"<div class='tiny muted' style='line-height:1.5;'>"
-            f"上次跑：{_mins_ago} 分鐘前"
-            + (f"<br>下次自動：約 {_next_in} 分鐘後" if _next_in is not None else "")
-            + "</div>",
-            unsafe_allow_html=True,
-        )
 
     st.markdown(" ")
 
@@ -2553,16 +2557,21 @@ _demo_on   = tsdb.has_demo_data()
 _aqi_src   = ["demo"] if _demo_on else ["cams_hourly"]
 _diary_src = "demo" if _demo_on else "cams_hourly"
 
-# ── 資料新鮮度的「目前真實年齡」修正 ─────────────────────────────────────────
-# snapshot 每城的 updated_min_ago 是「抓取那一刻」EPA 測站的落後分鐘,寫進 snapshot 後
-# 就固定了,不會隨牆鐘時間自己長大。若直接顯示,16:42 抓到「42 分鐘前」,過 10 分鐘
-# (沒重抓)再看仍是「42」—— 標籤被凍住、會誤導。修法:顯示時補上「距上次 Pipeline
-# 抓取至今經過的分鐘」,讓所有新鮮度標籤誠實遞增(→ 52)。重抓時 last_pipeline_run_at
-# 會更新、updated_min_ago 也會重算,所以 _elapsed_min 自然歸零。
-# 注意:這裡只在顯示端「相加」,不去改 snapshot 欄位本身 —— 那是 session_state 物件,
-#       原地累加會在每次 rerun 重複疊加而失準。
+# ── 資料新鮮度:顯示「絕對資料時間」而非「X 分鐘前」 ─────────────────────────
+# snapshot 每城的 updated_min_ago 是「抓取那一刻」EPA 測站的落後分鐘 — 寫進 snapshot
+# 後就固定了。相對顯示(「42 分鐘前」)需要頁面活著去遞增才誠實;改成顯示絕對時間:
+#   資料時間 ≈ last_pipeline_run_at − updated_min_ago(該城 EPA 發布時刻)
+# 絕對時間永遠為真,頁面閒置多久都不會變成謊言。_elapsed_min(距抓取已過分鐘)仍
+# 保留 —— 只用來算新鮮度「燈號顏色」(資料真實年齡 = 抓取時落後 + 閒置經過)。
 _last_run = st.session_state.get("last_pipeline_run_at")
 _elapsed_min = int((datetime.now() - _last_run).total_seconds() // 60) if _last_run else 0
+
+
+def _data_time_str(lag_min, fmt: str = "%H:%M") -> str:
+    """該筆資料的絕對時間(≈ EPA 發布時刻)= 抓取時間 − 抓取時落後分鐘。"""
+    if _last_run is None:
+        return "—"
+    return (_last_run - timedelta(minutes=int(lag_min))).strftime(fmt)
 
 # =============================================================================
 # SECTION · 02 即時 AQI 主儀表板 (MAIN DASHBOARD)
@@ -2649,9 +2658,10 @@ if ts_df is not None and not ts_df.empty:
             #    這兩個資料集的 publish 延遲常常 4-10 小時(早上 9 點還沒 publish
             #    凌晨的資料),這是上游 API 的特性,不是 app 的 bug。
             try:
-                epa_lag = int(snapshot["updated_min_ago"].mean()) + _elapsed_min
+                _lag0 = int(snapshot["updated_min_ago"].mean())
             except Exception:
-                epa_lag = 999
+                _lag0 = None
+            epa_lag = (_lag0 if _lag0 is not None else 999) + _elapsed_min
             # emoji / 顏色 跟著 snapshot lag(實際使用者看到的數據新鮮度)
             if epa_lag < 60:
                 freshness_emoji, freshness_color = "🟢", "#00e676"
@@ -2677,10 +2687,9 @@ if ts_df is not None and not ts_df.empty:
                 f"<div class='tiny muted' style='text-align:center; margin-top:-0.2rem; margin-bottom:0.4rem; line-height:1.6;'>"
                 f"{freshness_emoji} <b style='color:{freshness_color};'>{freshness_label}</b> · "
                 f"現在 <b>{now_local.strftime('%m/%d %H:%M')}</b> · "
-                f"EPA 即時測站平均落後 <b>{epa_lag} 分鐘</b>(當下 AQI 來源)"
+                f"EPA 即時測站資料時間 <b>{_data_time_str(_lag0, '%m/%d %H:%M') if _lag0 is not None else '—'}</b>(當下 AQI 來源)"
                 f"<br>"
-                f"24h 歷史最新整點:<b style='color:#00d9ff;'>{time_labels[-1]}</b>"
-                f"(落後 {history_delay_min} 分鐘){history_hint}"
+                f"24h 歷史最新整點:<b style='color:#00d9ff;'>{time_labels[-1]}</b>{history_hint}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -2862,13 +2871,14 @@ fresh_cards = "".join(
     f"<div class='kpi-card' style='min-width:128px; {'border:1px solid #00d9ff; box-shadow:0 0 18px rgba(0,217,255,0.4);' if focus_id == row['city_id'] else ''}'>"
     f"<div style='display:flex; justify-content:space-between; align-items:center;'>"
     f"<div class='tiny' style='font-weight:700; color:#e8eef7;'>{row['city']}</div>"
-    f"<div style='width:7px; height:7px; border-radius:50%; background:{'#00e676' if _m < 5 else ('#ffd93d' if _m < 10 else '#ff8c42')}; box-shadow:0 0 6px {'#00e676' if _m < 5 else ('#ffd93d' if _m < 10 else '#ff8c42')};'></div>"
+    f"<div style='width:7px; height:7px; border-radius:50%; background:{'#00e676' if _m < 45 else ('#ffd93d' if _m < 90 else '#ff8c42')}; box-shadow:0 0 6px {'#00e676' if _m < 45 else ('#ffd93d' if _m < 90 else '#ff8c42')};'></div>"
     f"</div>"
-    f"<div style='font-family:JetBrains Mono; color:{'#00e676' if _m < 5 else ('#ffd93d' if _m < 10 else '#ff8c42')}; font-size:0.95rem; font-weight:700; margin-top:0.3rem;'>{_m}m ago</div>"
+    f"<div style='font-family:JetBrains Mono; color:{'#00e676' if _m < 45 else ('#ffd93d' if _m < 90 else '#ff8c42')}; font-size:0.95rem; font-weight:700; margin-top:0.3rem;'>{_t}</div>"
     f"<div class='tiny muted'>AQI {row['aqi']:.0f}</div>"
     f"</div>"
     for _, row in snapshot.iterrows()
-    for _m in (int(row['updated_min_ago']) + _elapsed_min,)   # 目前真實年齡(凍結值 + 經過分鐘)
+    for _m in (int(row['updated_min_ago']) + _elapsed_min,)   # 資料真實年齡(只決定燈號顏色)
+    for _t in (_data_time_str(row['updated_min_ago']),)       # 絕對資料時間(顯示用)
 )
 st.markdown(
     f"<div style='display:flex; gap:0.6rem; flex-wrap:wrap;'>{fresh_cards}</div>",
@@ -3265,7 +3275,7 @@ for chunk_start in range(0, len(sorted_snap), 3):
                   <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
                     <div>
                       <div class='alert-city'>{row['city']}</div>
-                      <div class='tiny muted'>{row['region']} · 更新於 {row['updated_min_ago'] + _elapsed_min} 分鐘前</div>
+                      <div class='tiny muted'>{row['region']} · 資料時間 {_data_time_str(row['updated_min_ago'])}</div>
                     </div>
                     <div style='text-align:right;'>
                       <div class='alert-aqi' style='color:{row["color"]}; text-shadow:0 0 14px {row["color"]}55;'>{row['aqi']:.0f}</div>
