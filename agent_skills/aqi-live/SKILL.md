@@ -2,16 +2,16 @@
 
 ## Purpose
 
-讓 Hermes(Discord bot)回答台灣空品問題,資料來自 AgentAQI Pipeline 匯出的
-`hermes_export/latest_aqi.json`。這是**拉取(pull)模型** —— 不是 AgentAQI 推給
+讓聊天平台的 Agent Bot(本機範例:Hermes/Discord;LINE / Slack / Telegram 皆可)回答台灣空品問題,資料來自 AgentAQI Pipeline 匯出的
+`agent_export/latest_aqi.json`。這是**拉取(pull)模型** —— 不是 AgentAQI 推給
 Hermes,而是 Hermes「來這裡讀」最新一次 Pipeline 的結果。
 
 ## 資料來源
 
-`<AgentAQI 專案根>/hermes_export/latest_aqi.json`,每次使用者在 AgentAQI 跑一次
+`<AgentAQI 專案根>/agent_export/latest_aqi.json`,每次使用者在 AgentAQI 跑一次
 Pipeline 就更新(UTF-8 JSON)。路徑可用環境變數 `AGENTAQI_EXPORT` 覆寫。
 
-## JSON 契約（由 `data.build_hermes_payload()` 產生）
+## JSON 契約（由 `data.build_agent_payload()` 產生）
 
 | 欄位 | 說明 |
 |------|------|
@@ -25,7 +25,7 @@ Pipeline 就更新(UTF-8 JSON)。路徑可用環境變數 `AGENTAQI_EXPORT` 覆�
 | `user_city` / `user_city_name` / `user_city_advice` | 使用者常駐城市與其建議 |
 | `threshold` | 個人 AQI 預警閾值(同 `user_profile.threshold`,頂層重複一份方便取用) |
 
-## Discord 觸發 → 回答規則
+## 聊天平台觸發 → 回答規則(平台不限,以 Discord 為例)
 
 - `@bot` / 訊息含「空氣」「空品」「AQI」→ 回全國概況(`national`)。
 - 訊息含城市名(如「台北」)→ 回該城市 AQI + 等級 + `advisories[該城市]`。
@@ -34,12 +34,12 @@ Pipeline 就更新(UTF-8 JSON)。路徑可用環境變數 `AGENTAQI_EXPORT` 覆�
 - `data_mode != real` → 開頭標「(模擬 / demo 資料)」。
 - 找不到城市 / 檔案不存在 / 過舊 → 明說,不要猜。
 
-## 本機驗證（不用 Discord）
+## 本機驗證（不用任何聊天平台）
 
 ```
-python hermes_skills/aqi-live/read_export.py            # 全國概況
-python hermes_skills/aqi-live/read_export.py 台北市      # 指定城市 + persona 提醒
+python agent_skills/aqi-live/read_export.py            # 全國概況
+python agent_skills/aqi-live/read_export.py 台北市      # 指定城市 + persona 提醒
 ```
 
-印出的文字就是 Hermes 會貼進 Discord 的內容。Discord bot 端可直接呼叫這支腳本,
+印出的文字就是 bot 會貼進聊天平台的內容。bot 端可直接呼叫這支腳本,
 或在 Hermes 內以等價邏輯讀同一份 JSON。

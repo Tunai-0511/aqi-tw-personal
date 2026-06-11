@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Record a Discord `feel 1~5` check-in into AgentAQI's health diary.
+"""Record a chat-platform `feel 1~5` check-in into AgentAQI's health diary.
 
-This script is intentionally small and endpoint-free: Hermes/Discord users can
-reply with `feel 4`, then run this helper to persist the score into the same
-SQLite `health_diary` table used by Streamlit SECTION · 09.
+Platform-agnostic (Discord / Telegram / LINE / Slack…). This script is
+intentionally small and endpoint-free: chat users reply with `feel 4`, then the
+bot (or you) runs this helper to persist the score into the same SQLite
+`health_diary` table used by Streamlit SECTION · 09.
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ def record_feel(
     score: int,
     city_id: str = "taichung",
     outdoor_min: int = 0,
-    note: str = "Discord feel command",
+    note: str = "feel 指令打卡",
     entry_date: date | None = None,
 ) -> dict[str, object]:
     """Write one feel score into tsdb.health_diary and return the saved values."""
@@ -66,11 +67,11 @@ def record_feel(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Record Discord feel check-in into AgentAQI health_diary")
+    parser = argparse.ArgumentParser(description="Record chat-platform feel check-in into AgentAQI health_diary")
     parser.add_argument("text", help="`feel 1`..`feel 5` or bare `1`..`5`")
     parser.add_argument("--city", default="taichung", choices=sorted(CITY_BY_ID), help="city_id for health_diary")
-    parser.add_argument("--outdoor-min", type=int, default=0, help="outdoor exposure minutes; default 0 for quick Discord check-in")
-    parser.add_argument("--note", default="Discord feel command", help="note saved in health_diary")
+    parser.add_argument("--outdoor-min", type=int, default=0, help="outdoor exposure minutes; default 0 for quick chat check-in")
+    parser.add_argument("--note", default="feel 指令打卡", help="note saved in health_diary")
     parser.add_argument("--date", dest="entry_date", help="YYYY-MM-DD; defaults to today")
     args = parser.parse_args(argv)
 

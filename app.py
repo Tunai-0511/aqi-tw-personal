@@ -55,7 +55,7 @@ from data import (
     LLM_PROVIDERS,
     USER_ICD10_OPTIONS,
     aqi_to_level,
-    build_hermes_payload,
+    build_agent_payload,
     call_llm_api,
     fetch_citizen_sensors,
     fetch_open_meteo_aq_batch,
@@ -67,8 +67,8 @@ from data import (
     parse_agent_c_per_city,
 )
 import tsdb
-# 對接後端是「拉取」模型:Pipeline 跑完把結果匯出成 hermes_export/latest_aqi.json,
-# Hermes(Discord bot)讀它在 Discord 回答。in-app LLM 仍直接打各家 HTTP API。
+# 對接後端是「拉取」模型:Pipeline 跑完把結果匯出成 agent_export/latest_aqi.json,
+# 聊天平台的 Agent Bot 讀它回答(本機範例:Hermes/Discord;LINE / Slack / Telegram 皆可)。in-app LLM 仍直接打各家 HTTP API。
 from styles import AGENT_STAGE_CSS, DARK_THEME_CSS
 # charts 模組:所有 Plotly 圖表工廠
 from charts import (
@@ -783,8 +783,8 @@ def _paint_chat(ph) -> None:
 
 
 # =============================================================================
-# Hermes JSON 匯出(拉取模型)— Pipeline 跑完寫 hermes_export/latest_aqi.json,
-# Hermes(Discord bot)讀它在 Discord 回答。取代舊的 Discord webhook 推送。
+# Agent Bot JSON 匯出(拉取模型)— Pipeline 跑完寫 agent_export/latest_aqi.json,
+# 聊天平台 Agent Bot 讀它回答(本機範例:Hermes/Discord)。取代舊的 webhook 推送。
 # =============================================================================
 def _persona_dict():
     """把使用者個人健康檔案組成結構化 dict(供 JSON 匯出);完全沒填回 None。
@@ -820,10 +820,10 @@ def _persona_dict():
     }
 
 
-def _write_hermes_export(snapshot_df):
-    """把這次 Pipeline 結果寫成 hermes_export/latest_aqi.json(Hermes 拉取用)。回傳 Path。"""
+def _write_agent_export(snapshot_df):
+    """把這次 Pipeline 結果寫成 agent_export/latest_aqi.json(Agent Bot 拉取用)。回傳 Path。"""
     from pathlib import Path
-    payload = build_hermes_payload(
+    payload = build_agent_payload(
         snapshot_df,
         analysis=st.session_state.get("llm_analysis", ""),
         advisories_raw=st.session_state.get("agent_c_advisories", ""),
@@ -832,7 +832,7 @@ def _write_hermes_export(snapshot_df):
         threshold=int(st.session_state.get("user_aqi_threshold", 100)),
         user_profile=_persona_dict(),
     )
-    out_dir = Path(__file__).resolve().parent / "hermes_export"
+    out_dir = Path(__file__).resolve().parent / "agent_export"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "latest_aqi.json"
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -960,7 +960,7 @@ def run_pipeline(
             UI / 匯出用 `parse_agent_c_per_city()` 拆 dict(單城市一筆)
 
       整批寫入 SQLite tsdb(時序快取),供「過去 7 天」紀錄板使用。
-      最後把結果匯出成 hermes_export/latest_aqi.json,供 Hermes(Discord bot)拉取。
+      最後把結果匯出成 agent_export/latest_aqi.json,供聊天平台 Agent Bot 拉取(本機範例:Hermes/Discord)。
 
     Parameters
     ----------
@@ -1242,11 +1242,11 @@ def run_pipeline(
     _refresh_log()
     time.sleep(0.15)
 
-    # ── 匯出 JSON 供 Hermes(Discord bot)拉取 ────────────────────────────
+    # ── 匯出 JSON 供聊天平台 Agent Bot 拉取(本機範例:Hermes/Discord)──────
     # 拉取模型(取代舊的 webhook 推送):把這次 Pipeline 的結果寫成
-    # hermes_export/latest_aqi.json,Hermes skill 讀它在 Discord 回答。
+    # agent_export/latest_aqi.json,bot 端 skill 讀它在聊天平台回答。
     try:
-        _exp_path = _write_hermes_export(snapshot)
+        _exp_path = _write_agent_export(snapshot)
         push_log("C", f"✓ 已匯出 {_exp_path.name}(Agent Bot 可拉取 · {len(snapshot)} 城市)", to="EXPORT")
     except Exception as e:
         push_log("C", f"⚠ JSON 匯出失敗:{type(e).__name__}: {e}", to="EXPORT")
@@ -1389,7 +1389,7 @@ with st.sidebar:
         )
 
     # ── 進階整合:Agent Bot(拉取模型)──────────────────────────────────
-    # Pipeline 跑完會把結果匯出成 hermes_export/latest_aqi.json,任何 agent bot
+    # Pipeline 跑完會把結果匯出成 agent_export/latest_aqi.json,任何 agent bot
     # (以 Hermes 為範例)當聊天平台 bot 讀它回答(依個人檔案個人化)。
     # 不再用 webhook 推送 / cron 指令。設定與匯出狀態見 SECTION 10。
     st.markdown(
@@ -1787,7 +1787,7 @@ def _render_persona_step1() -> None:
     為什麼放在 Pipeline 之前:分析師(B)/ 預警員(C)的 LLM prompt 是在 run_pipeline()
     期間用 _personal_profile_block() 組的。把 persona 填在「跑之前」,第一次跑就吃得到
     →根治舊版「填完要重跑一次」的問題。填好的 persona 也會隨 Pipeline 匯出進
-    hermes_export/latest_aqi.json,供 Hermes(Discord bot)個人化回答。
+    agent_export/latest_aqi.json,供聊天平台 Agent Bot 個人化回答。
 
     所有欄位沿用既有 session_state mirror(user_*)+ widget key(user_*_input /
     *_select),SECTION 08 改成只讀結果,不再有同名 widget,故無 key 衝突。
@@ -1842,7 +1842,7 @@ def _render_persona_step1() -> None:
             st.info(
                 "🔒 **隱私說明** — 個人健康檔案只存在你本機 session。跑 Pipeline 時會:"
                 "(a) 作為 prompt context 送到你**自己設定**的 LLM 雲端 API(Anthropic / Gemini / "
-                "OpenAI / MiniMax)做個人化分析;(b) 寫進本機 `hermes_export/latest_aqi.json`,供你"
+                "OpenAI / MiniMax)做個人化分析;(b) 寫進本機 `agent_export/latest_aqi.json`,供你"
                 "**自架的 Agent Bot(聊天平台)** 讀取回答。**不會傳給專案作者或任何第三方**;想移除按下方「🗑 清除」。"
             )
 
@@ -3909,10 +3909,10 @@ with diary_c2:
 
 
 # =============================================================================
-# SECTION · 10 · Hermes Discord Bot(拉取模型)
+# SECTION · 10 · Agent Bot(拉取模型 · 平台中性)
 # =============================================================================
 # 不再「推送」(舊版:Discord webhook / 產生排程推送指令)。改成「拉取」:
-# Pipeline 跑完把結果寫進 hermes_export/latest_aqi.json,你自架的 Hermes(Discord
+# Pipeline 跑完把結果寫進 agent_export/latest_aqi.json,你自架的聊天平台 bot(本機範例:Hermes/Discord
 # bot)讀它在頻道回答 —— 含封面步驟①填的個人健康檔案(persona),回答會個人化。
 # 本區只顯示「匯出狀態」與「怎麼把 Hermes 設成 bot」,不再有表單 / cron 指令。
 # =============================================================================
@@ -3921,14 +3921,14 @@ st.markdown("<span class='eyebrow' style='margin-top:1.5rem; display:inline-bloc
 st.markdown("<div class='section-title'>Agent Bot · 讓 bot 來這裡抓資料</div>", unsafe_allow_html=True)
 st.markdown(
     "<div class='section-sub'>不用 webhook、不用排程指令。Pipeline 跑完會把結果匯出成 "
-    "<code>hermes_export/latest_aqi.json</code>,任何 agent bot(以 Hermes 為範例)"
+    "<code>agent_export/latest_aqi.json</code>,任何 agent bot(以 Hermes 為範例)"
     "在聊天平台(Discord / LINE / Slack…)讀它回答(自動帶上你在封面步驟①填的個人健康檔案)。</div>",
     unsafe_allow_html=True,
 )
 
 # ── 匯出狀態(讀 latest_aqi.json)────────────────────────────────────────────
 from pathlib import Path as _Path
-_export_path = _Path(__file__).resolve().parent / "hermes_export" / "latest_aqi.json"
+_export_path = _Path(__file__).resolve().parent / "agent_export" / "latest_aqi.json"
 if _export_path.exists():
     try:
         _exp = json.loads(_export_path.read_text(encoding="utf-8"))
@@ -3961,14 +3961,14 @@ else:
 st.markdown("<div class='eyebrow' style='margin-top:1rem;'>把 Agent Bot 接上聊天平台</div>", unsafe_allow_html=True)
 st.markdown(
     "1. 準備一個會讀 JSON 的 agent 框架(本機已有 **Hermes** CLI 可當範例;任何會讀 JSON 的 bot 皆可)。\n"
-    "2. 把本專案的 `hermes_skills/aqi-live/` skill 裝給它(讓它會讀 `latest_aqi.json`)。\n"
+    "2. 把本專案的 `agent_skills/aqi-live/` skill 裝給它(讓它會讀 `latest_aqi.json`)。\n"
     "3. 在聊天平台(Discord / LINE / Slack…)開一個 Bot、邀請進伺服器,綁到該 agent。\n"
     "4. 之後在聊天室打 `@bot 台中現在空氣如何`,bot 就會讀最新匯出 + 你的 persona 回答。\n\n"
-    "詳細步驟見 `hermes_skills/aqi-live/SKILL.md`(以 Hermes 為範例)與 README『Agent Bot 整合』段。"
+    "詳細步驟見 `agent_skills/aqi-live/SKILL.md`(以 Hermes 為範例)與 README『Agent Bot 整合』段。"
 )
 st.caption(
     "本機快速驗證(不用聊天平台):在專案目錄跑 "
-    "`python hermes_skills/aqi-live/read_export.py 台中市`,就能看到 bot 會貼的內容。"
+    "`python agent_skills/aqi-live/read_export.py 台中市`,就能看到 bot 會貼的內容。"
 )
 
 

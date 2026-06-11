@@ -1,16 +1,16 @@
 """
-aqi-live skill reader — 讀 AgentAQI 匯出的 latest_aqi.json,印出可貼進 Discord 的
-繁中空品摘要(全國概況 / 指定城市 + 依 user_profile 個人化)。
+aqi-live skill reader — 讀 AgentAQI 匯出的 latest_aqi.json,印出可貼進聊天平台的
+繁中空品摘要(全國概況 / 指定城市 + 依 user_profile 個人化)。平台不限。
 
 這是「拉取模型」的 Hermes 端:AgentAQI 跑完 Pipeline 把結果寫進
-hermes_export/latest_aqi.json,Hermes(Discord bot)呼叫本腳本(或內嵌等價邏輯)
+agent_export/latest_aqi.json,聊天平台 bot(本機範例:Hermes/Discord)呼叫本腳本(或內嵌等價邏輯)
 讀那份 JSON 回答 —— 不需要任何外部 API key。
 
 用法:
     python read_export.py            # 全國概況
     python read_export.py 台北市      # 指定城市 + 個人化提醒
 
-路徑:預設讀 <專案根>/hermes_export/latest_aqi.json,可用環境變數 AGENTAQI_EXPORT 覆寫。
+路徑:預設讀 <專案根>/agent_export/latest_aqi.json,可用環境變數 AGENTAQI_EXPORT 覆寫。
 """
 from __future__ import annotations
 
@@ -28,12 +28,12 @@ for _stream in (sys.stdout, sys.stderr):
 
 
 def export_path() -> Path:
-    """latest_aqi.json 的路徑:優先用 AGENTAQI_EXPORT 環境變數,否則專案根的 hermes_export/。"""
+    """latest_aqi.json 的路徑:優先用 AGENTAQI_EXPORT 環境變數,否則專案根的 agent_export/。"""
     env = os.environ.get("AGENTAQI_EXPORT")
     if env:
         return Path(env)
-    # 本檔在 hermes_skills/aqi-live/ → 專案根是上兩層
-    return Path(__file__).resolve().parent.parent.parent / "hermes_export" / "latest_aqi.json"
+    # 本檔在 agent_skills/aqi-live/ → 專案根是上兩層
+    return Path(__file__).resolve().parent.parent.parent / "agent_export" / "latest_aqi.json"
 
 
 def _persona_line(prof: dict | None) -> str:
@@ -55,7 +55,7 @@ def _persona_line(prof: dict | None) -> str:
 
 
 def format_reply(data: dict, city_query: str | None = None) -> str:
-    """把 latest_aqi.json 內容格式化成一段可貼進 Discord 的繁中回覆。"""
+    """把 latest_aqi.json 內容格式化成一段可貼進聊天平台的繁中回覆(平台不限)。"""
     mode = data.get("data_mode", "?")
     tag = "" if mode == "real" else f"（⚠ {mode} 資料）"
     lines: list[str] = []

@@ -98,13 +98,13 @@
 
 1. **匯出狀態**:SECTION 10 會顯示「✓ 最後匯出:時間 · 20 城市 · 資料模式 · 個人檔案:有」。
    展開「👁 預覽 Agent Bot 會回的內容」,當場看到 bot 會貼的全國概況 + 你城市的建議。
-   > 「這份 `hermes_export/latest_aqi.json` 就是 Pipeline 剛剛寫的 —— 全台數據 + 分析 + 你的 persona。」
+   > 「這份 `agent_export/latest_aqi.json` 就是 Pipeline 剛剛寫的 —— 全台數據 + 分析 + 你的 persona。」
 
 2. **現場 @bot / 本機驗證(很有說服力)**:本機 Hermes 已綁定 Discord 頻道
    (#每日空氣天氣報告),可直接在頻道打 `@bot 台中空氣如何` 現場示範;
    或切到 terminal 跑
    ```
-   python hermes_skills\aqi-live\read_export.py 台中市
+   python agent_skills\aqi-live\read_export.py 台中市
    ```
    印出的繁中內容**就是 bot 會貼進聊天平台的**(含「🩺 給 72 歲、COPD、BMI 24.1 的提醒」)。
    > 「Agent bot 就是呼叫這支(或讀同一份 JSON)。資料是 AgentAQI 預先抓好的,

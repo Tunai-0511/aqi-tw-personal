@@ -16,7 +16,7 @@ AgentAQI 的核心命題:**全民監控 → 個人健康決策**,四層價值:
    (WHO 2021 / EPA NAAQS / Lancet 2023),算出今天還能在戶外幾小時、要哪種防護;
    **儀表板預設聚焦你的城市**(全台監控保留為決策脈絡 — 是錨定,不是過濾)。
 3. **用你的日誌驗證敏感度** — 每天打卡症狀,系統對當日真實 AQI 算皮爾森相關 r,用你自己的數據證明空污對你的影響。
-4. **把答案帶到你在的地方** — Pipeline 匯出一份 JSON,**已預裝的 Hermes bot** 在 Discord 讀它回答(拉取模型,不綁特定產品)。
+4. **把答案帶到你在的地方** — Pipeline 匯出一份 JSON,聊天平台的 Agent Bot 讀它回答(拉取模型,**不綁特定平台或產品** — 本機範例剛好是 Hermes + Discord,換 LINE / Slack / Telegram 只要 bot 會讀同一份 JSON)。
 
 AgentAQI 兩件事是分開的：
 
@@ -24,7 +24,7 @@ AgentAQI 兩件事是分開的：
 |------|------|--------|
 | **直接 LLM API**（Anthropic / Gemini / MiniMax / OpenAI / 自訂） | Pipeline 中分析師 + 預警員的 LLM 呼叫 + 右下角 AI 助理 | ⭐ 必填一個 |
 | **EPA Open Data Token**（環境部資料開放平臺） | 拉取 20 縣市即時 AQI | ⭐ 必填 |
-| **Agent Bot**（讀 JSON 匯出 · Hermes 等任何 agent bot 皆可） | 在聊天平台(Discord / LINE…)回答空品(含個人化) | 已預裝（本機 Hermes 已綁 Discord;沒有 bot 也可全功能跑） |
+| **Agent Bot**（讀 JSON 匯出 · 任何 agent bot / 聊天平台皆可） | 在聊天平台(Discord / LINE / Slack / Telegram…)回答空品(含個人化) | 已預裝（本機**範例**:Hermes 綁 Discord;換平台只要 bot 會讀 JSON;沒有 bot 也可全功能跑） |
 
 ---
 
@@ -62,11 +62,12 @@ AgentAQI 兩件事是分開的：
 再點「▶ 啟動三代理人 Pipeline」→ smooth scroll 到劇場區 → 3 個 agent 依序亮起跑分析（~10-30 秒）→ 主儀表板出來。
 **先填再跑**,分析師 / 預警員第一次就會據你的檔案個人化(不必重跑)。
 
-### Step 4（已就緒）：在 Discord 問 bot
+### Step 4（已就緒）：在聊天平台問 bot
 
-本機已裝好 Hermes、裝了 `aqi-live` skill、以 `aqi-reporter` 人設綁定 Discord 頻道
-**#每日空氣天氣報告**。跑完 Pipeline 會自動匯出 `hermes_export/latest_aqi.json`,
-之後在頻道 `@bot 台中現在空氣如何` 即可(含 persona 個人化提醒)。詳見下方「🤖 Agent Bot 整合」段。
+跑完 Pipeline 會自動匯出 `agent_export/latest_aqi.json`,任何聊天平台的 bot 讀它即可回答。
+**本機範例**:已裝好 Hermes、裝了 `aqi-live` skill、以 `aqi-reporter` 人設綁定 Discord 頻道
+**#每日空氣天氣報告** — 在頻道 `@bot 台中現在空氣如何` 即可(含 persona 個人化提醒)。
+Discord 只是範例;契約是一份 JSON,LINE / Slack / Telegram 任何 bot 都能接。詳見下方「🤖 Agent Bot 整合」段。
 
 ---
 
@@ -109,7 +110,7 @@ Pipeline 也不會被覆蓋**;`--clear` 後自動回讀真實資料。完整逐�
 | 氣象（溫濕度、風向、氣壓） | Open-Meteo | `api.open-meteo.com/v1/forecast` | ✗ 公開 |
 | LLM 分析 | Anthropic / Google Gemini / MiniMax / OpenAI / 自訂 | 各自的 `/chat/completions` 或 `/v1/messages` | ✓ 你的 LLM key |
 | 本機時序快取 | SQLite | `./agent_aqi.sqlite` | ✗ 純本機 |
-| Hermes 拉取(取代推送) | 本機 JSON 匯出 | `hermes_export/latest_aqi.json` | ✗ 純本機 |
+| Agent Bot 拉取(取代推送) | 本機 JSON 匯出 | `agent_export/latest_aqi.json` | ✗ 純本機 |
 
 ---
 
@@ -168,34 +169,35 @@ SECTION 07 預警員詳細建議跟著所選城市(可一鍵重生;縣市卡雙�
 **本機已整合完成**:Hermes 已安裝、裝好本專案的 `aqi-live` skill、以 `aqi-reporter` 人設
 綁定 Discord 頻道(**#每日空氣天氣報告**)、`AGENTAQI_EXPORT` 已指向本專案匯出檔。
 跑完 Pipeline 後,直接在 Discord `@bot 台中現在空氣如何` 即可。
-AgentAQI 主功能不依賴 bot(沒有 bot 也能全功能跑);契約只是一份 JSON,任何 bot 框架都能接。
+AgentAQI 主功能不依賴 bot(沒有 bot 也能全功能跑);契約只是一份 JSON,任何 bot 框架、
+任何聊天平台(LINE / Slack / Telegram…)都能接 — **Hermes 與 Discord 都只是本機範例,不是專案的綁定**。
 
 ### 怎麼運作（拉取模型,不是推送)
 
-1. **Pipeline 跑完 → 匯出 JSON**:每次跑完 Pipeline,AgentAQI 會把這次結果(全台 20 城市快照 + 分析師摘要 + 預警員為所選城市的詳細建議 + 你在**封面步驟①**填的個人健康檔案)寫成 `hermes_export/latest_aqi.json`。
-2. **Agent Bot 來這裡讀**:你自架的 agent bot 裝上本專案的 `hermes_skills/aqi-live/` skill(以 Hermes 為範例實作),讀那份 JSON。
+1. **Pipeline 跑完 → 匯出 JSON**:每次跑完 Pipeline,AgentAQI 會把這次結果(全台 20 城市快照 + 分析師摘要 + 預警員為所選城市的詳細建議 + 你在**封面步驟①**填的個人健康檔案)寫成 `agent_export/latest_aqi.json`。
+2. **Agent Bot 來這裡讀**:你自架的 agent bot 裝上本專案的 `agent_skills/aqi-live/` skill(以 Hermes 為範例實作),讀那份 JSON。
 3. **在聊天平台回答**:使用者打 `@bot 台中現在空氣如何`,bot 回最新數據 + 依 persona 的個人化提醒。換成別的 bot 框架,只要會讀這份 JSON 即可。
 
 > **AgentAQI 的對接**沒有 webhook、沒有 cron 指令 — 資料是「你問、bot 才來讀」(pull),不是 AgentAQI 主動推。
 > (repo 內另有組員的 Telegram **推播** watcher `external/cal-env-watch/`,那是獨立模組、不走這份匯出 — 見下方「姊妹模組」。)
 > 匯出狀態(最後匯出時間 / 城市數 / 是否含個人檔案)可在主畫面 **SECTION · 10** 看到。
 
-### 本機快速驗證（不用 Discord）
+### 本機快速驗證（不用任何聊天平台）
 
 ```powershell
-# 先在 App 跑一次 Pipeline 產生 hermes_export\latest_aqi.json,然後:
-python hermes_skills\aqi-live\read_export.py            # 全國概況
-python hermes_skills\aqi-live\read_export.py 台北市      # 指定城市 + persona 提醒
+# 先在 App 跑一次 Pipeline 產生 agent_export\latest_aqi.json,然後:
+python agent_skills\aqi-live\read_export.py            # 全國概況
+python agent_skills\aqi-live\read_export.py 台北市      # 指定城市 + persona 提醒
 ```
 
-印出的文字就是 Hermes 會貼進 Discord 的內容。匯出檔路徑可用環境變數 `AGENTAQI_EXPORT` 覆寫。
+印出的文字就是 bot 會貼進聊天平台的內容。匯出檔路徑可用環境變數 `AGENTAQI_EXPORT` 覆寫。
 
-### Discord 晚報 `feel 1~5` 打卡 → 健康日誌
+### 聊天平台晚報 `feel 1~5` 打卡 → 健康日誌
 
-如果你的 Discord 晚報提示使用者直接回覆 `feel 1~5`，可以用內建 helper 把分數寫進 Streamlit 已有的 `health_diary` SQLite 表，SECTION · 09 會直接讀到同一份資料：
+如果你的聊天平台晚報(例:Discord / Telegram)提示使用者直接回覆 `feel 1~5`，可以用內建 helper 把分數寫進 Streamlit 已有的 `health_diary` SQLite 表，SECTION · 09 會直接讀到同一份資料：
 
 ```bash
-python scripts/record_feel.py "feel 4" --city taichung --outdoor-min 0 --note "Discord 晚報回覆"
+python scripts/record_feel.py "feel 4" --city taichung --outdoor-min 0 --note "晚報回覆"
 ```
 
 支援格式：
@@ -208,7 +210,7 @@ python scripts/record_feel.py "feel 4" --city taichung --outdoor-min 0 --note "D
 - table: `health_diary`
 - 欄位：`date`, `city_id`, `symptom_score`, `outdoor_min`, `note`, `created_at`
 
-這個方案不需要 Discord button、interaction endpoint、ngrok 或 Cloudflare Tunnel；使用 Discord 原本輸入框即可。
+這個方案不需要平台 button、interaction endpoint、ngrok 或 Cloudflare Tunnel；使用聊天室原本的輸入框即可(任何平台皆然)。
 
 ### 姊妹模組:cal-env-watch（組員 · OpenClaw + Telegram 主動推播）
 
@@ -231,13 +233,13 @@ python scripts/record_feel.py "feel 4" --city taichung --outdoor-min 0 --note "D
 ### 在另一台機器重建整合（參考;本機不需要）
 
 1. 安裝並啟動 Hermes(`hermes` CLI)。
-2. 把 `hermes_skills/aqi-live/` 裝給 Hermes、`hermes_agents/aqi-reporter/` 作為 bot 人設。
-3. Discord Developer Portal 開 Bot → 邀請進伺服器 → 綁到 Hermes;
-   設環境變數 `AGENTAQI_EXPORT` 指向 `hermes_export/latest_aqi.json`。
-4. 在 Discord `@bot` 問空品即可。詳見 [`hermes_skills/aqi-live/SKILL.md`](hermes_skills/aqi-live/SKILL.md)。
+2. 把 `agent_skills/aqi-live/` 裝給 Hermes、`agent_personas/aqi-reporter/` 作為 bot 人設。
+3. 在目標聊天平台開 Bot(以 Discord 為例:Developer Portal 建立 → 邀請進伺服器)→ 綁到 Hermes;
+   設環境變數 `AGENTAQI_EXPORT` 指向 `agent_export/latest_aqi.json`。
+4. 在聊天室 `@bot` 問空品即可。詳見 [`agent_skills/aqi-live/SKILL.md`](agent_skills/aqi-live/SKILL.md)。
 
-> JSON 契約欄位見 `hermes_skills/aqi-live/SKILL.md`;產生邏輯在 [`data.py`](data.py) 的
-> `build_hermes_payload()`,寫檔在 [`app.py`](app.py) 的 `_write_hermes_export()`。
+> JSON 契約欄位見 `agent_skills/aqi-live/SKILL.md`;產生邏輯在 [`data.py`](data.py) 的
+> `build_agent_payload()`,寫檔在 [`app.py`](app.py) 的 `_write_agent_export()`。
 
 ---
 
@@ -265,16 +267,16 @@ python scripts/record_feel.py "feel 4" --city taichung --outdoor-min 0 --note "D
    │                 (sidebar 選的 LLM 提供商；in-app 即時回應)
    │
    ├──── SQLite ──► ./agent_aqi.sqlite        (本機時序快取 + 健康日誌；跨重啟保留)
-   └──── write ──► ./hermes_export/latest_aqi.json
+   └──── write ──► ./agent_export/latest_aqi.json
                           (Pipeline 跑完匯出;Agent Bot「來這裡讀」回答 —
                            拉取模型,不是 AgentAQI 主動推。詳見「Agent Bot 整合」段)
 
            ┌──────────────────────────────────────────────┐
-   讀取 ◄──┤ Agent Bot(聊天平台 · hermes_skills/aqi-live)  │──► 在聊天平台回答(含 persona)
+   讀取 ◄──┤ Agent Bot(聊天平台 · agent_skills/aqi-live)  │──► 在聊天平台回答(含 persona)
            └──────────────────────────────────────────────┘
 ```
 
-**為什麼是「拉取」不是「推送」？** 不必架 webhook、不必註冊 cron;使用者在 Discord 問了,Hermes 才來讀最新匯出回答。資料只在本機 JSON,Hermes 與 AgentAQI 解耦 —— 換成別的 bot 框架也只要會讀這份 JSON 即可。
+**為什麼是「拉取」不是「推送」？** 不必架 webhook、不必註冊 cron;使用者在聊天室問了,bot 才來讀最新匯出回答。資料只在本機 JSON,bot 與 AgentAQI 解耦 —— 換 bot 框架、換聊天平台,都只要會讀這份 JSON 即可。
 
 ---
 
@@ -288,9 +290,9 @@ python scripts/record_feel.py "feel 4" --city taichung --outdoor-min 0 --note "D
 | EPA「失敗：TOKEN 無效 / 速率限制」 | 用 sidebar 的「🔌 測試 EPA Token」看伺服器原始錯誤；常見：token 複製時漏字 |
 | EPA「JSON 解出但找不到 records · 結構：...」 | MOENV 又改 schema。請貼錯誤訊息給 dev 補 `_resolve_col` |
 | Pipeline 跑完 LLM 評論段是空的 | sidebar 沒填 LLM key；填了再啟動一次 |
-| SECTION 10 顯示「尚未匯出」 | 還沒跑過 Pipeline;跑一次就會產生 `hermes_export/latest_aqi.json` |
+| SECTION 10 顯示「尚未匯出」 | 還沒跑過 Pipeline;跑一次就會產生 `agent_export/latest_aqi.json` |
 | `read_export.py` 找不到匯出檔 | 先在 App 跑一次 Pipeline,或設環境變數 `AGENTAQI_EXPORT` 指到檔案 |
-| Discord `@bot` 沒回 | 確認 Hermes gateway 在跑(`hermes gateway status`)、已跑過一次 Pipeline、`AGENTAQI_EXPORT` 指向正確路徑 |
+| 聊天平台 `@bot` 沒回(本機範例 Discord) | 確認 Hermes gateway 在跑(`hermes gateway status`)、已跑過一次 Pipeline、`AGENTAQI_EXPORT` 指向正確路徑 |
 | Port 8501 被佔 | 改 `.streamlit/config.toml` 的 `server.port` |
 
 ---
@@ -305,10 +307,10 @@ aqi-tw-personal-2/
 ├── charts.py               # Plotly 圖表工廠
 ├── styles.py               # 深色主題 CSS
 ├── _city_detail.py         # 城市深入 modal 共用渲染(底線前綴避免被 Streamlit pages 探索)
-├── hermes_export/          # Pipeline 匯出的 latest_aqi.json(已預裝的 Hermes bot 來讀)
-├── hermes_agents/          # Agent Bot 人設(已註冊到本機 Hermes)
+├── agent_export/           # Pipeline 匯出的 latest_aqi.json(任何 agent bot 來讀;本機範例:Hermes)
+├── agent_personas/         # Agent Bot 人設(平台中性;本機範例:已註冊到 Hermes)
 │   └── aqi-reporter/       # IDENTITY / SOUL / TOOLS / USER.md
-├── hermes_skills/          # Hermes skill(已安裝到本機 Hermes)
+├── agent_skills/           # Agent Bot skill(平台中性;本機範例:已安裝到 Hermes)
 │   └── aqi-live/           # SKILL.md + read_export.py(讀 latest_aqi.json 格式化回覆)
 ├── external/
 │   └── cal-env-watch/      # 組員模組(OpenClaw):行事曆×環境「事前預警」推播 Telegram
@@ -318,7 +320,7 @@ aqi-tw-personal-2/
 ├── scripts/
 │   ├── seed_demo_data.py   # 期末 demo 假資料灌庫(AQI 歷史;健康日誌由 App 自動回填)
 │   ├── seed_demo_data.bat  # ↑ 的 Windows 雙擊版(自動 activate venv)
-│   ├── record_feel.py      # Discord 晚報 `feel 1~5` → 寫進 health_diary
+│   ├── record_feel.py      # 聊天平台晚報 `feel 1~5` → 寫進 health_diary(平台不限)
 │   └── _fix_hermes_bind.py # Hermes config.yaml 安全重綁 helper(YAML emitter)
 ├── docs/
 │   ├── demo_guide.md       # 期末 demo 逐段講稿(SECTION 08-10)

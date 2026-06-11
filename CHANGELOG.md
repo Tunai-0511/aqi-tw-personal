@@ -12,6 +12,25 @@
 
 ---
 
+## [2026-06-11] 命名中性化:hermes_* → agent_*(契約不綁框架)
+
+### Changed
+- **改名**(契約是給任何 agent bot 的 — 包括 OpenClaw — 名字不該綁 Hermes):
+  `hermes_export/` → `agent_export/`、`hermes_skills/` → `agent_skills/`、
+  `hermes_agents/` → `agent_personas/`、`build_hermes_payload()` → `build_agent_payload()`、
+  `_write_hermes_export()` → `_write_agent_export()`。散文中「本機範例:Hermes」保留。
+  全 repo ~60 處引用同步(app / data / README / demo_guide / SKILL / 人設檔)。
+- **Hermes runtime 同步**:profile `.env` 的 `AGENTAQI_EXPORT` 改指 `agent_export/`;
+  安裝副本重新同步;gateway 重啟驗證(discord connected、port 8645、config 解析 ✓)。
+
+### Fixed
+- **config.yaml 二度損壞(01:04,Hermes 自身 config writer 的長字串 bug)→ 根治**:
+  `discord.channel_prompts` 不再內嵌 1900+ 字完整 persona,改為 ~300 字精簡指令
+  (指向已安裝 aqi-live skill 與 `AGENTAQI_EXPORT`);完整人設留在 skill / repo 文件。
+  `scripts/_fix_hermes_bind.py` 同步改寫成短 prompt 版,之後重跑不會再引入脆弱長字串。
+
+---
+
 ## [2026-06-10] 收錄組員模組 cal-env-watch(原樣 vendored)
 
 ### Added

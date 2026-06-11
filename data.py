@@ -23,7 +23,7 @@
    - `generate_real_snapshot()`:整合上述 API 產出真實的「當下快照」
    - `generate_real_timeseries()`:整合產出真實的「24h 時序」
    - `call_llm_api()`:呼叫各家 LLM(Anthropic / Gemini / MiniMax / OpenAI / 自訂)
-   - `build_hermes_payload()`:組 Pipeline 結果成 JSON,供 Hermes(Discord bot)拉取
+   - `build_agent_payload()`:組 Pipeline 結果成 JSON,供聊天平台 Agent Bot 拉取(平台中性契約)
 
 備註: 此檔案早期是純 mock 生成器(docstring 寫的就是這樣),後來逐步加入
 真實 API 後,mock 變成「fallback 安全網」而非主要路徑。`app.py:603-609`
@@ -1286,7 +1286,7 @@ def fetch_open_meteo_aq_batch(
     return pd.DataFrame(rows) if rows else None
 
 
-def build_hermes_payload(
+def build_agent_payload(
     snapshot_df: pd.DataFrame,
     analysis: str,
     advisories_raw: str,
@@ -1296,11 +1296,11 @@ def build_hermes_payload(
     user_profile: dict | None = None,
     generated_at: str | None = None,
 ) -> dict:
-    """組裝給 Hermes(Discord bot)拉取的 JSON 匯出內容。
+    """組裝給聊天平台 Agent Bot 拉取的 JSON 匯出內容(平台中性;本機範例:Hermes/Discord)。
 
     架構是「拉取(pull)」而非「推送(push)」:Pipeline 跑完把這份 dict json.dump 到
-    `hermes_export/latest_aqi.json`,Hermes skill(hermes_skills/aqi-live)讀它後在
-    Discord 回答空品 +(若 user_profile 非空)個人化提醒。**本函式純資料組裝**
+    `agent_export/latest_aqi.json`,bot 端 skill(agent_skills/aqi-live)讀它後在
+    聊天平台回答空品 +(若 user_profile 非空)個人化提醒。**本函式純資料組裝**
     (不寫檔、不碰 st、不發 HTTP),方便單元測試與 app.py 端控制寫入時機。
 
     Parameters
@@ -1325,7 +1325,7 @@ def build_hermes_payload(
     Returns
     -------
     dict
-        可直接 json.dump 的 payload(契約見 hermes_skills/aqi-live/SKILL.md)。
+        可直接 json.dump 的 payload(契約見 agent_skills/aqi-live/SKILL.md)。
     """
     cities: list[dict] = []
     national: dict = {"avg_aqi": None, "worst": None, "best": None}
@@ -1379,7 +1379,7 @@ def build_hermes_payload(
 # 的插件冷啟,對「使用者按鈕後幾秒內要看到結果」的 UI 太慢。因此 Pipeline 內的
 # LLM 呼叫(分析師 / 預警員 / 右下角助理 / 城市比較)一律直接呼叫各家 provider
 # 的 HTTP API,毫秒級延遲。對外整合(聊天平台回答)改用「拉取」模型 ——
-# Pipeline 匯出 JSON、agent bot 來讀(見 build_hermes_payload),同樣不經 gateway。
+# Pipeline 匯出 JSON、agent bot 來讀(見 build_agent_payload),同樣不經 gateway。
 # =============================================================================
 
 # 所有支援的 LLM 提供商配置 — 加新家只要在這加一筆即可。
