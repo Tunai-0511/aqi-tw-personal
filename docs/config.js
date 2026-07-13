@@ -2,6 +2,6 @@
 // project. Never point AgentAQI at a database shared with another application.
 window.AQI_CONFIG = Object.freeze({
   backendUrl: "",
-  supabaseUrl: "",
-  supabasePublishableKey: "",
+  supabaseUrl: "https://egxqqymduotguaaioooh.supabase.co",
+  supabasePublishableKey: "sb_publishable_-pLlGi-HCyGAbRlTluF_rQ_kUCHZg34",
 });
