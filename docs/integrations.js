@@ -75,8 +75,14 @@ function renderPlatform(platform) {
     detail.textContent = "需要 Discord OAuth 與中央 Bot。";
     button.textContent = "連接 Discord";
     button.dataset.mode = "connect";
+    button.disabled = !state.config?.discord_enabled && !state.config?.dev_mode;
+    if (button.disabled) {
+      button.textContent = "等待 Agent 後端";
+      detail.textContent = "Supabase 登入已可用；Discord 仍需部署 FastAPI 與 Hermes。";
+    }
     return;
   }
+  button.disabled = false;
   const labels = { connected: "已綁定", provisioning: "佈建中", ready: "Profile 已建立", error: "需要處理" };
   stateEl.textContent = labels[item.status] || item.status;
   stateEl.classList.add(item.status === "ready" ? "ready" : item.status === "error" ? "error" : "working");
@@ -98,14 +104,28 @@ async function loadConfig() {
   $("backend-url").value = backendUrl();
   try {
     state.config = await api("/api/integrations/config");
+    state.config.backend_online = true;
     setServiceStatus(state.config.hermes_mode === "disabled" ? "整合 API 已連線" : `Hermes：${state.config.hermes_mode}`, true);
     $("setup-notice").hidden = state.config.enabled;
     if (!state.config.enabled) $("setup-message").textContent = "請先執行 Supabase SQL 並設定後端環境變數。";
   } catch (error) {
-    setServiceStatus("後端未連線");
+    const publicConfig = window.AQI_CONFIG || {};
+    const hasPublicSupabase = Boolean(publicConfig.supabaseUrl && publicConfig.supabasePublishableKey);
+    state.config = {
+      enabled: hasPublicSupabase,
+      auth_enabled: hasPublicSupabase,
+      dev_mode: false,
+      backend_online: false,
+      supabase_url: publicConfig.supabaseUrl || "",
+      supabase_anon_key: publicConfig.supabasePublishableKey || "",
+      discord_enabled: false,
+      hermes_mode: "backend-required",
+    };
+    setServiceStatus(hasPublicSupabase ? "Supabase 已連線" : "後端未連線", hasPublicSupabase);
     $("setup-notice").hidden = false;
-    $("setup-message").textContent = error.message;
-    state.config = { enabled: false, auth_enabled: false, dev_mode: false };
+    $("setup-message").textContent = hasPublicSupabase
+      ? "Supabase 登入已就緒；Discord 與 Hermes 仍需要可執行 FastAPI／Docker 的後端主機。"
+      : error.message;
   }
 
   if (state.config.auth_enabled) {
@@ -115,11 +135,11 @@ async function loadConfig() {
     state.supabase.auth.onAuthStateChange((_event, session) => {
       state.session = session;
       renderAuth();
-      if (session) loadIntegrations().catch((error) => toast(error.message));
+      if (session && state.config.backend_online) loadIntegrations().catch((error) => toast(error.message));
     });
   }
   renderAuth();
-  if (state.session) await loadIntegrations();
+  if (state.session && state.config.backend_online) await loadIntegrations();
 }
 
 async function connectDiscord() {
