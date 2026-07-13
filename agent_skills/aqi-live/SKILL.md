@@ -2,7 +2,7 @@
 
 ## Purpose
 
-讓聊天平台的 Agent Bot(本機範例:Hermes/Discord;LINE / Slack / Telegram 皆可)回答台灣空品問題,資料來自 AgentAQI Pipeline 匯出的
+讓 Discord 上的 Hermes Agent Bot 回答台灣空品問題，資料來自 AgentAQI Pipeline 匯出的
 `agent_export/latest_aqi.json`。這是**拉取(pull)模型** —— 不是 AgentAQI 推給
 Hermes,而是 Hermes「來這裡讀」最新一次 Pipeline 的結果。
 

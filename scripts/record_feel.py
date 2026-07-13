@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record a chat-platform `feel 1~5` check-in into AgentAQI's health diary.
 
-Platform-agnostic (Discord / Telegram / LINE / Slack…). This script is
+Discord-oriented but transport-independent. This script is
 intentionally small and endpoint-free: chat users reply with `feel 4`, then the
 bot (or you) runs this helper to persist the score into the same SQLite
 local `health_diary` table. This is a trusted local integration, not a public

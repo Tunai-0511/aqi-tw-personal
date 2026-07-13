@@ -31,8 +31,7 @@ create table if not exists public.agent_integrations (
 alter table public.user_profiles enable row level security;
 alter table public.agent_integrations enable row level security;
 
--- Migration from the earlier LINE prototype: discard obsolete rows/table and
--- narrow the public integration surface to Discord only.
+-- Keep the public integration surface restricted to Discord only.
 delete from public.agent_integrations where platform <> 'discord';
 alter table public.agent_integrations drop constraint if exists agent_integrations_platform_check;
 alter table public.agent_integrations add constraint agent_integrations_platform_check check (platform = 'discord');
