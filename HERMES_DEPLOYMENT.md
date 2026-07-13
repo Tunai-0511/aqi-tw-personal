@@ -22,6 +22,8 @@ python -m http.server 8801 --directory docs
 
 ## 2. Supabase
 
+AgentAQI 必須使用獨立的 Supabase Project，不可與 IPAS 或其他正式服務共用資料庫。
+
 1. 在 Supabase SQL Editor 執行 `supabase/schema.sql`。
 2. Authentication → URL Configuration：
    - Site URL：正式 Cloudflare 網域。

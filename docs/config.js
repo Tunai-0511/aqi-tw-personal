@@ -1,7 +1,7 @@
-// Public browser configuration. Supabase publishable keys are intentionally
-// safe to expose; authorization is enforced by Row Level Security.
+// Configure these values only after creating a dedicated AgentAQI Supabase
+// project. Never point AgentAQI at a database shared with another application.
 window.AQI_CONFIG = Object.freeze({
   backendUrl: "",
-  supabaseUrl: "https://mugrltimxkvlqyksymjq.supabase.co",
-  supabasePublishableKey: "sb_publishable_sznSWzic9rhGXtq7kvxs9w_5opmC27g",
+  supabaseUrl: "",
+  supabasePublishableKey: "",
 });
