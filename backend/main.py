@@ -24,10 +24,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import data
 from . import agents, chat as chat_mod, pipeline
 from .config import settings
+from .integrations import router as integrations_router
 from .personalize import UserProfile
 from .schemas import AdvisorRequest, ChatRequest, PipelineRequest
 
 app = FastAPI(title="AgentAQI 後端", version="2.0")
+app.include_router(integrations_router)
 # CORS：預設只放行本機（localhost / 127.0.0.1，任意 port），避免公開部署時被任意網站
 # 跨站 POST 盜刷 LLM / EPA 金鑰（denial-of-wallet）。要讓 GitHub Pages 前端連上部署後的
 # 後端，明確設環境變數 AQI_CORS=https://你的帳號.github.io（可逗號分隔多個）。
@@ -84,6 +86,11 @@ def health() -> dict:
         "has_llm": settings.has_llm,
         "agentic": settings.use_anthropic_agentic,  # True 才有「LLM 自己委派」的協調者
         "has_epa": bool(settings.epa_key),
+        "integrations": bool(
+            settings.integration_dev_mode
+            or (settings.supabase_url and settings.supabase_service_role_key)
+        ),
+        "hermes_mode": settings.hermes_provision_mode,
     }
 
 

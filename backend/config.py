@@ -39,6 +39,33 @@ class Settings:
         raw_cors = os.environ.get("AQI_CORS", "*")
         self.cors_origins = [o.strip() for o in raw_cors.split(",") if o.strip()] or ["*"]
 
+        # ── 公開多使用者與通訊平台整合 ──
+        self.public_app_url = os.environ.get("PUBLIC_APP_URL", "http://127.0.0.1:8801").rstrip("/")
+        self.supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        self.supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY", "").strip()
+        self.supabase_service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        self.integration_state_secret = os.environ.get("INTEGRATION_STATE_SECRET", "").strip()
+        self.integration_dev_mode = os.environ.get("INTEGRATION_DEV_MODE", "0").lower() in {
+            "1", "true", "yes", "on",
+        }
+
+        self.discord_client_id = os.environ.get("DISCORD_CLIENT_ID", "").strip()
+        self.discord_client_secret = os.environ.get("DISCORD_CLIENT_SECRET", "").strip()
+        self.discord_redirect_uri = os.environ.get(
+            "DISCORD_REDIRECT_URI", "http://127.0.0.1:8000/api/integrations/discord/callback"
+        ).strip()
+        self.discord_permissions = os.environ.get("DISCORD_BOT_PERMISSIONS", "117760").strip()
+
+        # disabled：只完成帳號綁定；docker/cli：自動建立 Hermes profile。
+        self.hermes_provision_mode = os.environ.get("HERMES_PROVISION_MODE", "disabled").strip().lower()
+        self.hermes_cli = os.environ.get("HERMES_CLI", "hermes").strip() or "hermes"
+        self.hermes_container = os.environ.get("HERMES_CONTAINER", "hermes").strip() or "hermes"
+        self.hermes_template_profile = os.environ.get("HERMES_TEMPLATE_PROFILE", "").strip()
+        self.hermes_provision_timeout = int(os.environ.get("HERMES_PROVISION_TIMEOUT", "45"))
+        self.hermes_api_url = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642").rstrip("/")
+        self.hermes_api_key = os.environ.get("HERMES_API_KEY", "").strip()
+        self.hermes_api_timeout = int(os.environ.get("HERMES_API_TIMEOUT", "55"))
+
     @property
     def effective_llm_key(self) -> str:
         """實際要用的金鑰：anthropic 可用 LLM_KEY 或 ANTHROPIC_API_KEY；其他供應商用 LLM_KEY。"""

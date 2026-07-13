@@ -36,6 +36,11 @@ dist/
 # Logs
 *.log
 
+# Local environment secrets
+.env
+.env.hermes
+.env.local
+
 # Local SQLite TSDB cache
 *.sqlite
 *.sqlite-journal

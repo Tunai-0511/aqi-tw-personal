@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#07101d" />
+  <meta name="description" content="連接 AgentAQI、Hermes Agent 與 Discord。" />
+  <title>Agent 整合中心｜AgentAQI</title>
+  <script>
+    try { document.documentElement.dataset.theme = localStorage.getItem("aqi_theme") || "dark"; } catch (_) {}
+  </script>
+  <link rel="stylesheet" href="./styles.css?v=6" />
+  <link rel="stylesheet" href="./integrations.css?v=1" />
+</head>
+<body>
+  <header class="topbar integration-topbar">
+    <a class="brand" href="./index.html">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><b>AgentAQI</b><small>HERMES CONNECT</small></span>
+    </a>
+    <nav class="integration-nav" aria-label="頁面導覽">
+      <a href="./index.html">空品儀表板</a>
+      <a class="active" href="./integrations.html" aria-current="page">Agent 整合</a>
+    </nav>
+    <div class="topbar-actions">
+      <span class="backend-chip" id="service-status">檢查服務中</span>
+      <button class="text-button" id="sign-out" type="button" hidden>登出</button>
+    </div>
+  </header>
+
+  <main class="integration-main">
+    <section class="integration-hero">
+      <div>
+        <p class="eyebrow">ONE AGENT · EVERYWHERE</p>
+        <h1>讓你的空氣助理<br /><span>跟著你到常用平台</span></h1>
+        <p>登入後連接 Discord。系統會保存帳號綁定、建立 Hermes Profile，並顯示目前佈建進度。</p>
+      </div>
+      <div class="hero-agent-orbit" aria-hidden="true">
+        <span class="orbit-core">H</span><i></i><i></i><i></i>
+      </div>
+    </section>
+
+    <section class="setup-notice card" id="setup-notice" hidden>
+      <div><p class="eyebrow">SETUP REQUIRED</p><h2>整合服務尚未完成設定</h2><p id="setup-message"></p></div>
+      <details>
+        <summary>設定後端網址</summary>
+        <form id="backend-form"><label for="backend-url">FastAPI 網址</label><div><input id="backend-url" type="url" placeholder="http://127.0.0.1:8000" /><button class="primary-button" type="submit">重新連線</button></div></form>
+      </details>
+    </section>
+
+    <section class="auth-card card" id="auth-card">
+      <div class="auth-copy"><p class="eyebrow">IDENTITY</p><h2 id="auth-title">先確認你的身分</h2><p id="auth-description">平台連線與 Agent 記憶會綁定到你的帳號。</p></div>
+      <form class="auth-form" id="magic-form" hidden>
+        <label for="auth-email">Email</label>
+        <div><input id="auth-email" type="email" autocomplete="email" placeholder="you@example.com" required /><button class="primary-button" type="submit">寄送登入連結</button></div>
+      </form>
+      <form class="auth-form" id="demo-form" hidden>
+        <label for="demo-user">本機測試使用者</label>
+        <div><input id="demo-user" maxlength="32" value="tester" required /><button class="primary-button" type="submit">進入示範模式</button></div>
+      </form>
+      <div class="signed-user" id="signed-user" hidden><span class="profile-avatar" id="user-avatar">A</span><div><small>目前登入</small><strong id="user-label"></strong></div></div>
+    </section>
+
+    <section class="connect-section" id="connect-section" aria-labelledby="connect-title" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">CHANNELS</p><h2 id="connect-title">選擇通訊平台</h2><p>每個平台都使用同一個 AgentAQI 帳號與個人偏好。</p></div>
+        <button class="text-button" id="refresh-status" type="button">重新整理狀態</button>
+      </div>
+
+      <div class="platform-grid">
+        <article class="platform-card card" data-platform="discord">
+          <div class="platform-head"><span class="platform-icon discord-icon">D</span><span class="platform-state" id="discord-state">未連接</span></div>
+          <h3>Discord</h3><p>把 AgentAQI 加入伺服器或私訊，直接詢問 AQI 與戶外活動建議。</p>
+          <div class="platform-detail" id="discord-detail">需要 Discord OAuth 與中央 Bot。</div>
+          <button class="primary-button platform-action" id="discord-action" type="button">連接 Discord</button>
+        </article>
+
+        <article class="platform-card card coming-soon">
+          <div class="platform-head"><span class="platform-icon more-icon">＋</span><span class="platform-state">規劃中</span></div>
+          <h3>更多平台</h3><p>Telegram、Slack 與 WhatsApp 可以沿用同一套整合控制層。</p>
+          <div class="platform-detail">完成前兩個平台後即可擴充。</div>
+          <button class="ghost-button platform-action" type="button" disabled>即將推出</button>
+        </article>
+      </div>
+    </section>
+
+    <section class="security-strip">
+      <div><strong>帳號隔離</strong><span>綁定資料以 Supabase User ID 區分</span></div>
+      <div><strong>金鑰留在後端</strong><span>Service Role 與平台密鑰不進入瀏覽器</span></div>
+      <div><strong>可隨時中斷</strong><span>解除綁定不刪除 AQI 個人偏好</span></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="./integrations.js?v=1"></script>
+</body>
+</html>

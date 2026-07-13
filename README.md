@@ -1,5 +1,7 @@
 # AgentAQI
 
+> Hermes、Supabase 與 Discord 的完整設定請看 [HERMES_DEPLOYMENT.md](./HERMES_DEPLOYMENT.md)。前端整合中心位於 `docs/integrations.html`。
+
 AgentAQI 是以台灣空氣品質為核心的個人化健康資訊服務。目前專案由純 HTML／CSS／JavaScript 前端、FastAPI 後端與定時資料抓取流程組成；即使後端未啟動，前端仍可讀取排程產生的靜態 JSON。
 
 > 本專案提供空氣品質資訊與一般性活動建議，不取代醫療診斷或專業醫療意見。

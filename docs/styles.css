@@ -116,6 +116,7 @@ img, svg { display: block; max-width: 100%; }
 .freshness { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .mode-badge { color: #291700; background: #f5bd56; border-color: transparent; }
 .topbar-actions { justify-self: end; display: flex; align-items: center; gap: 8px; }
+.integration-link { display: inline-grid; place-items: center; min-height: 40px; padding: 8px 13px; border: 1px solid var(--border); border-radius: 11px; color: var(--muted-strong); background: var(--surface-soft); font-size: 10px; font-weight: 850; text-decoration: none; }
 
 .icon-button, .ghost-button, .primary-button, .text-button { border: 0; transition: transform .16s ease, background .16s ease, border-color .16s ease, opacity .16s ease; }
 .icon-button { display: inline-grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface-soft); font-size: 18px; }

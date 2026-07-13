@@ -1,0 +1,22 @@
+services:
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes
+    restart: unless-stopped
+    command: gateway run
+    env_file:
+      - .env.hermes
+    environment:
+      HERMES_DASHBOARD: "1"
+    ports:
+      - "127.0.0.1:8642:8642"
+      - "127.0.0.1:9119:9119"
+    volumes:
+      - hermes-data:/opt/data
+      - ./agent_skills/aqi-live:/opt/data/skills/aqi-live:ro
+      - ./agent_export:/workspace/agent_export:ro
+    mem_limit: 4g
+    cpus: 2
+
+volumes:
+  hermes-data:
