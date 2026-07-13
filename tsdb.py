@@ -4,7 +4,7 @@
 
 為什麼用 SQLite 而不是 InfluxDB / TimescaleDB / Postgres?
   - **單一檔案 zero-install**:`agent_aqi.sqlite` 一個檔搞定,
-    使用者不用裝資料庫服務 — 對校園 demo / 個人專案最友善
+    使用者不用另裝資料庫服務，適合本機快取與受信任工具
   - **Python 標準函式庫內建**(`sqlite3`),不用 `pip install` 額外套件
   - **資料量小,SQLite 綽綽有餘**:
     20 城市 × ~10 欄位 × 每小時 1 筆 ≈ 5,000 列/天;
@@ -402,36 +402,6 @@ def city_period_avg(
     )
 
 
-def has_demo_data(city_id: str | None = None) -> bool:
-    """是否存在期末 demo 假資料(`data_mode='demo'`)。
-
-    `scripts/seed_demo_data.py` 灌入的列都標 `data_mode='demo'` 且放在隔離的
-    `source='demo'`。UI 用這個判斷要不要改讀 demo source —— 讓 demo 數據即使在
-    使用者重跑真實 Pipeline(會寫 `source='cams_hourly'`)之後仍然存在、不被覆蓋。
-
-    Parameters
-    ----------
-    city_id : str | None
-        指定城市則只查該城市;None 查是否「任一城市」有 demo 資料。
-
-    Returns
-    -------
-    bool
-    """
-    init()
-    with sqlite3.connect(DB_PATH) as c:
-        if city_id:
-            row = c.execute(
-                "SELECT 1 FROM aqi_snapshots WHERE data_mode='demo' AND city_id=? LIMIT 1",
-                (city_id,),
-            ).fetchone()
-        else:
-            row = c.execute(
-                "SELECT 1 FROM aqi_snapshots WHERE data_mode='demo' LIMIT 1"
-            ).fetchone()
-    return row is not None
-
-
 # ─── 健康日誌 (Health Diary) — P1 #2 ──────────────────────────────────────
 # 使用者每日打卡記錄症狀 / 戶外時數,跨 session 持久化在本機 SQLite。
 # 與 AQI 時序關聯後可看出「個人對哪種污染物較敏感」。
@@ -550,9 +520,7 @@ def diary_with_aqi(city_id: str, days: int = 30, source: str = "cams_hourly") ->
     days : int
         往回看多少天
     source : str
-        要 JOIN 哪個來源的 AQI,預設 'cams_hourly'(真實歷史)。期末 demo 模式會傳
-        'demo' —— 這樣即使之後跑真實 Pipeline 覆寫 cams_hourly,demo 散點仍對齊
-        到隔離的 demo 資料,不會被洗掉。
+        要 JOIN 哪個來源的 AQI，預設為 `cams_hourly`。
 
     Returns
     -------

@@ -1,8 +1,21 @@
-streamlit>=1.40.0
+# AgentAQI 執行環境（2.0：FastAPI 多 agent 後端 + 靜態前端，已移除 Streamlit）。
+#
+# 這份 = 後端主程式要的全部相依（run_backend.bat 也裝這份）。
+# 另有 requirements-fetch.txt：給 GitHub Actions 排程抓資料用的精簡清單
+#   （只有 requests/pandas/numpy/truststore，不含 anthropic/fastapi）。
+#
+# 前端是純 HTML/JS/CSS（docs/），圖表用瀏覽器端 Plotly.js（CDN），不需要 Python plotly。
+
+# 多 agent（Anthropic Agent SDK）
+anthropic>=0.40.0
+
+# Web 後端
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.0.0
+
+# 資料層（data.py / tsdb.py）
 pandas>=2.0.0,<3.0.0
 numpy>=1.24.0
-plotly>=5.20.0,<6.0.0
 requests>=2.31.0
 truststore>=0.9.0
-pdfplumber>=0.10.0
-matplotlib>=3.10.9

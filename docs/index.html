@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#08111f" />
+  <meta name="description" content="依你的城市與活動需求整理台灣即時空氣品質，提供清楚、可追溯的個人行動建議。" />
+  <title>AgentAQI · 你的空氣行動指南</title>
+  <script>
+    try {
+      const savedTheme = localStorage.getItem("aqi_theme");
+      if (savedTheme === "light" || savedTheme === "dark") document.documentElement.dataset.theme = savedTheme;
+    } catch (_) {}
+  </script>
+  <script defer src="https://cdn.plot.ly/plotly-basic-2.35.2.min.js" charset="utf-8"
+          onload="window.dispatchEvent(new Event('plotly-ready'))"></script>
+  <link rel="stylesheet" href="./styles.css?v=5" />
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要內容</a>
+
+  <div class="data-alert" id="data-alert" role="status" aria-live="polite" hidden>
+    <span class="data-alert-icon" aria-hidden="true">!</span>
+    <div>
+      <strong id="data-alert-title">資料狀態提醒</strong>
+      <p id="data-alert-text"></p>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <a class="brand" href="#main-content" aria-label="AgentAQI 首頁">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><b>AgentAQI</b><small>你的空氣行動指南</small></span>
+    </a>
+    <div class="topbar-status">
+      <span class="live-pill" id="live-status"><i></i><span>資料載入中</span></span>
+      <time class="freshness" id="freshness">正在確認更新時間…</time>
+      <span class="mode-badge" id="mode-badge" hidden></span>
+    </div>
+    <div class="topbar-actions">
+      <button class="ghost-button profile-button" id="settings-btn" type="button"
+              aria-label="開啟個人設定" aria-controls="sidebar" aria-expanded="false">
+        <span class="profile-avatar" id="profile-avatar" aria-hidden="true">你</span>
+        <span class="profile-button-copy"><small>我的設定</small><b id="profile-button-name">建立個人偏好</b></span>
+      </button>
+      <button class="icon-button" id="theme-toggle" type="button" aria-label="切換淺色或深色主題">
+        <span id="theme-icon" aria-hidden="true">☾</span><span class="sr-only" id="theme-label">深色</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="main-content">
+    <section class="hero-grid" aria-labelledby="hero-city">
+      <article class="hero-card card" id="hero-card">
+        <div class="hero-copy">
+          <p class="eyebrow" id="greeting">嗨，先看看今天的空氣</p>
+          <div class="hero-title-row">
+            <div>
+              <h1 id="hero-city">你的城市</h1>
+              <p class="hero-summary" id="hero-summary">正在整理最重要的資訊…</p>
+            </div>
+            <label class="compact-field" for="home-city-select">
+              <span>快速切換</span>
+              <select id="home-city-select" aria-label="快速切換城市"></select>
+            </label>
+          </div>
+          <div class="hero-reading">
+            <div class="hero-aqi-block">
+              <span class="hero-aqi-label">現在 AQI</span>
+              <strong id="hero-aqi">—</strong>
+              <span class="level-chip" id="hero-level">載入中</span>
+            </div>
+            <div class="hero-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+          </div>
+          <div class="action-plan" aria-label="你的今日行動建議">
+            <article class="action-item">
+              <span class="action-icon" aria-hidden="true">↗</span>
+              <div><small>戶外活動</small><strong id="plan-outdoor">確認中</strong></div>
+            </article>
+            <article class="action-item">
+              <span class="action-icon" aria-hidden="true">◇</span>
+              <div><small>防護建議</small><strong id="plan-mask">確認中</strong></div>
+            </article>
+            <article class="action-item">
+              <span class="action-icon" aria-hidden="true">⌁</span>
+              <div><small>居家通風</small><strong id="plan-window">確認中</strong></div>
+            </article>
+          </div>
+        </div>
+      </article>
+
+      <aside class="snapshot-stack" aria-label="全國空氣摘要">
+        <article class="metric-card card">
+          <span class="metric-icon accent" aria-hidden="true">◎</span>
+          <div><small>全國平均</small><strong id="kpi-avg">—</strong><span>AQI</span></div>
+        </article>
+        <article class="metric-card card">
+          <span class="metric-icon warn" aria-hidden="true">↑</span>
+          <div><small>目前最高</small><strong id="kpi-worst">—</strong><span id="kpi-worst-foot"></span></div>
+        </article>
+        <article class="metric-card card">
+          <span class="metric-icon good" aria-hidden="true">↓</span>
+          <div><small>目前最低</small><strong id="kpi-best">—</strong><span id="kpi-best-foot"></span></div>
+        </article>
+      </aside>
+    </section>
+
+    <section class="card agent-section" aria-labelledby="agent-title">
+      <div class="section-heading agent-heading">
+        <div>
+          <p class="eyebrow">LIVE WORKFLOW</p>
+          <h2 id="agent-title">Agent 協作現場</h2>
+          <p>看見資料如何從採集、判讀，走到適合你的行動建議。</p>
+        </div>
+        <div class="section-actions">
+          <span class="backend-chip" id="backend-chip">後端未連線</span>
+          <button class="primary-button" id="run-agents" type="button" disabled>
+            <span aria-hidden="true">▶</span> 啟動分析
+          </button>
+        </div>
+      </div>
+
+      <div class="agent-flow" id="agent-flow" aria-label="Agent 執行流程" aria-busy="false">
+        <article class="agent-node" id="agent-node-coordinator" data-state="idle">
+          <div class="agent-node-top"><span class="agent-index">00</span><span class="agent-state" data-role="state">待命</span></div>
+          <span class="agent-symbol" aria-hidden="true">⌘</span>
+          <h3>流程協調者</h3><p>依能力與資料狀態調度工作</p>
+        </article>
+        <span class="agent-connector" aria-hidden="true"><i></i></span>
+        <article class="agent-node" id="agent-node-collector" data-state="idle">
+          <div class="agent-node-top"><span class="agent-index">01</span><span class="agent-state" data-role="state">待命</span></div>
+          <span class="agent-symbol" aria-hidden="true">⌁</span>
+          <h3>資料採集者</h3><p>整合即時數據與來源品質</p>
+        </article>
+        <span class="agent-connector" aria-hidden="true"><i></i></span>
+        <article class="agent-node" id="agent-node-analyst" data-state="idle">
+          <div class="agent-node-top"><span class="agent-index">02</span><span class="agent-state" data-role="state">待命</span></div>
+          <span class="agent-symbol" aria-hidden="true">◫</span>
+          <h3>趨勢分析師</h3><p>找出城市差異與風險訊號</p>
+        </article>
+        <span class="agent-connector" aria-hidden="true"><i></i></span>
+        <article class="agent-node" id="agent-node-advisor" data-state="idle">
+          <div class="agent-node-top"><span class="agent-index">03</span><span class="agent-state" data-role="state">待命</span></div>
+          <span class="agent-symbol" aria-hidden="true">✦</span>
+          <h3>行動顧問</h3><p>把分析轉成個人化建議</p>
+        </article>
+      </div>
+
+      <p class="agent-hint" id="agent-hint">
+        連上 FastAPI 後即可執行真實流程。<button class="text-button" id="set-backend" type="button">設定後端</button>
+      </p>
+      <div class="agent-log" id="agent-log" aria-live="polite" hidden></div>
+      <div class="agent-result" id="agent-result" hidden></div>
+    </section>
+
+    <section class="card explore-section" aria-labelledby="explore-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">EXPLORE</p><h2 id="explore-title">探索全台城市</h2><p>搜尋、篩選，最多選三座城市一起比較。</p></div>
+      </div>
+      <div class="filter-bar">
+        <label class="search-field" for="city-search"><span aria-hidden="true">⌕</span><input id="city-search" type="search" placeholder="搜尋城市" autocomplete="off" /></label>
+        <label><span class="sr-only">區域</span><select id="region-filter"><option value="all">所有區域</option></select></label>
+        <label><span class="sr-only">排序方式</span><select id="sort-select"><option value="aqi-desc">AQI 高到低</option><option value="aqi-asc">AQI 低到高</option><option value="name">城市名稱</option></select></label>
+      </div>
+      <div class="city-grid" id="city-grid" aria-live="polite"></div>
+
+      <div class="compare-panel" id="compare-panel" hidden>
+        <div class="compare-head"><div><small>COMPARE</small><h3>城市比較</h3></div><div id="compare-cities" class="compare-chips"></div><button class="text-button" id="compare-clear" type="button">清除比較</button></div>
+        <div class="chart compare-chart" id="compare-chart"></div>
+      </div>
+    </section>
+
+    <section class="detail-grid" aria-label="城市數據視覺化">
+      <article class="card city-card">
+        <div class="section-heading compact">
+          <div><p class="eyebrow">CITY FOCUS</p><h2 id="city-title">城市詳情</h2></div>
+          <label class="compact-field" for="city-select"><span>選擇城市</span><select id="city-select"></select></label>
+        </div>
+        <div class="city-detail">
+          <div class="gauge-wrap" id="gauge" aria-label="城市 AQI"></div>
+          <div class="poll-grid" id="pollutants"></div>
+        </div>
+        <div class="trend-head"><h3>近期 AQI 變化</h3><div class="segmented" id="trend-range" aria-label="趨勢時間範圍"><button type="button" data-hours="6">6h</button><button type="button" data-hours="12">12h</button><button type="button" data-hours="24" class="active">24h</button></div></div>
+        <div class="chart trend-chart" id="trend"></div>
+      </article>
+
+      <article class="card ranking-card">
+        <div class="section-heading compact"><div><p class="eyebrow">NATIONAL VIEW</p><h2>全台 AQI 排行</h2></div></div>
+        <div class="chart ranking-chart" id="ranking"></div>
+      </article>
+    </section>
+
+    <section class="card analyst-card" id="analyst" hidden>
+      <div class="section-heading compact"><div><p class="eyebrow">AI BRIEF</p><h2>全國現況摘要</h2></div></div>
+      <p class="analyst-text" id="analyst-text"></p>
+    </section>
+
+    <section class="trust-strip" aria-label="資料與隱私說明">
+      <div><strong>資料可追溯</strong><span>顯示來源、模式與更新時間</span></div>
+      <div><strong>偏好不含病歷</strong><span>瀏覽器只保存非敏感顯示偏好</span></div>
+      <div><strong>健康資訊有限制</strong><span>行動建議不取代醫療專業</span></div>
+    </section>
+  </main>
+
+  <footer class="site-foot">
+    <strong>AgentAQI</strong><span>資料來源：環境部 Open Data、Open-Meteo CAMS</span><span>空氣資訊僅供一般參考</span>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+  <aside class="sidebar" id="sidebar" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1" hidden>
+    <div class="sidebar-head"><div><p class="eyebrow">PERSONALIZE</p><h2 id="settings-title">我的空氣偏好</h2></div><button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="關閉個人設定">×</button></div>
+    <form class="sidebar-body" id="settings-form">
+      <section class="side-sec">
+        <h3>個人顯示</h3>
+        <label for="set-name">怎麼稱呼你</label><input id="set-name" maxlength="24" placeholder="例：小安" autocomplete="nickname" />
+        <label for="set-city">常駐城市</label><select id="set-city"></select>
+        <label for="set-sensitivity">空氣敏感程度</label><select id="set-sensitivity"><option value="general">一般</option><option value="sensitive">較敏感</option></select>
+        <label for="set-activity">主要活動</label><select id="set-activity"><option value="commute">通勤</option><option value="walk">散步</option><option value="run">跑步</option><option value="cycle">單車</option><option value="outdoor">戶外工作</option></select>
+        <label for="set-threshold">我的提醒門檻：<b id="set-thr-val">100</b></label><input id="set-threshold" type="range" min="50" max="180" step="5" value="100" />
+        <p class="side-note">只在這台裝置保存上述非敏感偏好，不保存疾病、病歷或 LLM 金鑰。</p>
+      </section>
+      <section class="side-sec advanced-sec">
+        <details>
+          <summary>開發者連線</summary>
+          <label for="set-backend-url">FastAPI 網址</label><input id="set-backend-url" inputmode="url" placeholder="http://127.0.0.1:8000" autocomplete="off" />
+          <span class="side-status" id="set-backend-status">未連線</span>
+        </details>
+      </section>
+      <div class="sidebar-actions"><button class="text-button danger-text" id="settings-reset" type="button">清除偏好</button><button class="primary-button" id="settings-save" type="submit">儲存並套用</button></div>
+    </form>
+  </aside>
+
+  <button class="fab" id="chat-fab" type="button" aria-label="開啟 AQI 助理" aria-controls="chat-panel" aria-expanded="false"><span aria-hidden="true">✦</span></button>
+  <section class="chat-panel" id="chat-panel" role="dialog" aria-modal="false" aria-labelledby="chat-title" hidden>
+    <div class="chat-head"><div><span class="chat-status-dot" aria-hidden="true"></span><div><small>AGENTAQI</small><strong id="chat-title">空氣助理</strong></div></div><button class="icon-button chat-close" id="chat-close" type="button" aria-label="關閉 AQI 助理">×</button></div>
+    <div class="chat-body" id="chat-body" aria-live="polite"><div class="chat-msg bot"><span class="txt">嗨，我可以依目前資料回答城市空品問題。連上後端後可取得更完整的分析。</span></div></div>
+    <form class="chat-input" id="chat-form"><label class="sr-only" for="chat-text">輸入空氣品質問題</label><input id="chat-text" type="text" maxlength="500" placeholder="問我現在適不適合出門…" autocomplete="off" /><button type="submit" aria-label="送出問題">↑</button></form>
+  </section>
+
+  <script>window.AQI_CONFIG = window.AQI_CONFIG || {};</script>
+  <script src="./app.js?v=5"></script>
+</body>
+</html>

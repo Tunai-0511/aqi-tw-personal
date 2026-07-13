@@ -1,0 +1,7 @@
+# headless 抓取腳本(scripts/fetch_headless.py)的相依 —— 只放抓資料真正會用到的。
+# 刻意不含 streamlit / plotly / pdfplumber / matplotlib,GitHub Actions 安裝才快。
+# data.py 在這個子集合下可以正常 import 與執行(只用到 requests + pandas + numpy)。
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0
+requests>=2.31.0
+truststore>=0.9.0

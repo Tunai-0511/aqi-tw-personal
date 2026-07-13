@@ -4,7 +4,8 @@
 Platform-agnostic (Discord / Telegram / LINE / Slack…). This script is
 intentionally small and endpoint-free: chat users reply with `feel 4`, then the
 bot (or you) runs this helper to persist the score into the same SQLite
-`health_diary` table used by Streamlit SECTION · 09.
+local `health_diary` table. This is a trusted local integration, not a public
+multi-user API; do not expose it without identity isolation.
 """
 from __future__ import annotations
 
